@@ -86,7 +86,6 @@ async function solveQuestion(page, questionNumber, reportGenerator) {
   } as QuestionResult;
 
   try {
-    await page.getByRole('button', { name: `Q${questionNumber}`, exact: true }).click();
     await page.waitForTimeout(1000);
 
     result.questionText =
@@ -95,7 +94,7 @@ async function solveQuestion(page, questionNumber, reportGenerator) {
     const codeEditor = page.locator('.ace_text-input');
     result.code = (await codeEditor.inputValue()) || 'Code not captured';
 
-    await page.getByRole('button', { name: /RUN CODE/i }).click();
+    await page.getByRole('button', { name: /RUN/i }).click();
 
     const success = await page
       .locator('text=Congratulations!You have passed')
@@ -135,13 +134,25 @@ test('Solve all coding questions', async ({ page, context }) => {
   const reportGenerator = new ReportGenerator();
   const totalQuestions = 85;
 
+  // Click Q1 to start
+  await page.getByRole('button', { name: 'Q1', exact: true }).click();
+  console.log('🎯 Starting with Q1...');
+
   for (let i = 1; i <= totalQuestions; i++) {
     await solveQuestion(page, i, reportGenerator);
-    const nextVisible = await page
-      .getByRole('button', { name: `Q${i + 1}`, exact: true })
-      .isVisible()
-      .catch(() => false);
-    if (!nextVisible) break;
+    
+    // Check if NEXT button exists
+    const nextButton = page.getByRole('button', { name: /NEXT/i });
+    const nextVisible = await nextButton.isVisible().catch(() => false);
+    
+    if (nextVisible) {
+      await nextButton.click();
+      console.log(`➡️ Moving to Q${i + 1}...`);
+      await page.waitForTimeout(500);
+    } else {
+      console.log('🏁 No NEXT button found. Reached the last question.');
+      break;
+    }
   }
 
   const reportPath = reportGenerator.generateExcelReport();
