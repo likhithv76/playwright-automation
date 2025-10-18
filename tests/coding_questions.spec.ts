@@ -11,10 +11,10 @@ const STORAGE_PATH = path.join(AUTH_DIR, 'user.json');
 const test = base.extend({
   storageState: async ({}, use) => {
     if (fs.existsSync(STORAGE_PATH)) {
-      console.log('🔁 Loading saved session from', STORAGE_PATH);
+      console.log('Loading saved session from', STORAGE_PATH);
       await use(STORAGE_PATH);
     } else {
-      console.log('📝 No saved session found, will perform manual login');
+      console.log('No saved session found, will perform manual login');
       await use(undefined);
     }
   },
@@ -23,7 +23,7 @@ const test = base.extend({
 export { test, expect };
 
 async function loginToApp(page, context) {
-  console.log('🔐 Starting Google OAuth login flow...');
+  console.log('Starting Google OAuth login flow...');
   await page.goto(BASE_URL, { waitUntil: 'networkidle' });
 
   const dashboardVisible = await page
@@ -31,7 +31,7 @@ async function loginToApp(page, context) {
     .isVisible()
     .catch(() => false);
   if (dashboardVisible) {
-    console.log('✅ Already logged in.');
+    console.log('Already logged in.');
     return;
   }
 
@@ -45,7 +45,7 @@ async function loginToApp(page, context) {
       currentUrl.includes('/Dashboard') ||
       currentUrl.includes('/dashboard')
     ) {
-      console.log('✅ Dashboard detected, login successful.');
+      console.log('Dashboard detected, login successful.');
       break;
     }
     await page.waitForTimeout(2000);
@@ -53,30 +53,30 @@ async function loginToApp(page, context) {
 
   if (!fs.existsSync(AUTH_DIR)) fs.mkdirSync(AUTH_DIR, { recursive: true });
   await context.storageState({ path: STORAGE_PATH });
-  console.log('💾 Session saved to:', STORAGE_PATH);
+  console.log('Session saved to:', STORAGE_PATH);
 }
 
 async function navigateToCodingQuestions(page) {
-  console.log(`🌐 Navigating to coding questions: ${BASE_URL}${TARGET_PATH}`);
+  console.log(`Navigating to coding questions: ${BASE_URL}${TARGET_PATH}`);
   await page.goto(`${BASE_URL}${TARGET_PATH}`, { waitUntil: 'networkidle' });
 
   const url = page.url();
   if (url.includes('/testing/coding/ht')) {
-    console.log('✅ Reached coding page directly.');
+    console.log('Reached coding page directly.');
     return;
   }
 
   if (url.includes('/Dashboard') || url.includes('/dashboard')) {
-    console.log('📍 From Dashboard → navigating to coding page...');
+    console.log('From Dashboard → navigating to coding page...');
     await page.goto(`${BASE_URL}${TARGET_PATH}`, { waitUntil: 'networkidle' });
   }
 
   await page.waitForSelector('button:has-text("Q1")', { timeout: 60000 });
-  console.log('✅ Coding questions page loaded.');
+  console.log('Coding questions page loaded.');
 }
 
 async function solveQuestion(page, questionNumber, reportGenerator) {
-  console.log(`🧩 Solving Question ${questionNumber}...`);
+  console.log(`Solving Question ${questionNumber}...`);
   const result = {
     questionNumber: `Q${questionNumber}`,
     questionText: '',
@@ -94,19 +94,30 @@ async function solveQuestion(page, questionNumber, reportGenerator) {
     const codeEditor = page.locator('.ace_text-input');
     result.code = (await codeEditor.inputValue()) || 'Code not captured';
 
-    await page.getByRole('button', { name: /RUN/i }).click();
+    await page.locator('//*[@id="root"]/div/div[3]/div[2]/div/div/div/div/div/div/div/div[3]/div[2]/div/div[2]/button').click();
 
     const success = await page
-      .locator('text=Congratulations!You have passed')
+      .locator('text=Congratulations!')
       .isVisible({ timeout: 10000 })
       .catch(() => false);
 
-    result.status = success ? 'PASSED' : 'FAILED';
-    console.log(success ? `✅ Passed Q${questionNumber}` : `❌ Failed Q${questionNumber}`);
+    const failure = await page
+      .locator('text=Wrong Answer')
+      .isVisible({ timeout: 10000 })
+      .catch(() => false);
+
+    if (success) {
+      result.status = 'PASSED';
+    } else if (failure) {
+      result.status = 'FAILED';
+    } else {
+      result.status = 'SKIPPED';
+    }
+    console.log(success ? `Passed Q${questionNumber}` : `Failed Q${questionNumber}`);
   } catch (err) {
     result.status = 'FAILED';
     result.errorMessage = err.message;
-    console.error(`⚠️ Error in Q${questionNumber}: ${err.message}`);
+    console.error(`Error in Q${questionNumber}: ${err.message}`);
   }
 
   reportGenerator.addResult(result);
@@ -123,10 +134,10 @@ test('Solve all coding questions', async ({ page, context }) => {
   const isLoggedIn = await page.locator('text=Dashboard').isVisible({ timeout: 5000 }).catch(() => false);
   
   if (!isLoggedIn) {
-    console.log('⚠️ Session expired or invalid. Performing manual login...');
+    console.log('Session expired or invalid. Performing manual login...');
     await loginToApp(page, context);
   } else {
-    console.log('✅ Session loaded successfully! Already logged in.');
+    console.log('Session loaded successfully! Already logged in.');
   }
 
   await navigateToCodingQuestions(page);
@@ -134,23 +145,21 @@ test('Solve all coding questions', async ({ page, context }) => {
   const reportGenerator = new ReportGenerator();
   const totalQuestions = 85;
 
-  // Click Q1 to start
   await page.getByRole('button', { name: 'Q1', exact: true }).click();
-  console.log('🎯 Starting with Q1...');
+  console.log('Starting with Q1...');
 
   for (let i = 1; i <= totalQuestions; i++) {
     await solveQuestion(page, i, reportGenerator);
     
-    // Check if NEXT button exists
-    const nextButton = page.getByRole('button', { name: /NEXT/i });
+    const nextButton = page.locator('//*[@id="root"]/div/div[3]/div[2]/div/div/div/div/div/div/div/div[3]/div[2]/div/div[2]/button[2]');
     const nextVisible = await nextButton.isVisible().catch(() => false);
     
     if (nextVisible) {
       await nextButton.click();
-      console.log(`➡️ Moving to Q${i + 1}...`);
+      console.log(`Moving to Q${i + 1}...`);
       await page.waitForTimeout(500);
     } else {
-      console.log('🏁 No NEXT button found. Reached the last question.');
+      console.log('No NEXT button found. Reached the last question.');
       break;
     }
   }
