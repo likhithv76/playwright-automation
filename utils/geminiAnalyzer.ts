@@ -15,14 +15,14 @@ export class GeminiAnalyzer {
     const apiKey = process.env.GEMINI_API_KEY;
     
     if (!apiKey || apiKey === 'your_api_key_here') {
-      console.warn('⚠️  GEMINI_API_KEY not found in .env file. Gemini analysis will be skipped.');
+      console.warn('GEMINI_API_KEY not found in .env file. Gemini analysis will be skipped.');
       this.genAI = null;
     } else {
       this.genAI = new GoogleGenerativeAI(apiKey);
     }
   }
 
-  async analyzeQuestionAndCode(questionText: string, code: string): Promise<GeminiAnalysis> {
+  async analyzeQuestionAndCode(questionText: string, code: string, codeFiles?: Array<{fileName: string, code: string}>): Promise<GeminiAnalysis> {
     if (!this.genAI) {
       return {
         remarks: 'Gemini analysis skipped - API key not configured',
@@ -31,16 +31,26 @@ export class GeminiAnalyzer {
     }
 
     try {
-      const model = this.genAI.getGenerativeModel({ model: 'gemini-pro' });
+      const model = this.genAI.getGenerativeModel({ model: 'gemini-2.5-flash' });
+
+      // Build code content for analysis
+      let codeContent = '';
+      if (codeFiles && codeFiles.length > 0) {
+        // If multiple files exist, format them nicely
+        codeContent = codeFiles.map(file => 
+          `FILE: ${file.fileName}\n\`\`\`\n${file.code}\n\`\`\``
+        ).join('\n\n');
+      } else {
+        // Single code block
+        codeContent = `\`\`\`\n${code}\n\`\`\``;
+      }
 
       const prompt = `You are a code review assistant. Analyze if the following question text matches the provided code solution.
 
 Question Text: "${questionText}"
 
 Code Solution:
-\`\`\`
-${code}
-\`\`\`
+${codeContent}
 
 Based on your analysis, provide:
 1. A brief assessment (maximum 50 words) about whether the question matches the code

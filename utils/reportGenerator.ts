@@ -2,10 +2,16 @@ import * as XLSX from 'xlsx';
 import * as fs from 'fs';
 import * as path from 'path';
 
+export interface CodeFile {
+  fileName: string;
+  code: string;
+}
+
 export interface QuestionResult {
   questionNumber: string;
   questionText: string;
-  code: string;
+  code: string; // Will contain formatted code from all files
+  codeFiles?: CodeFile[]; // Detailed breakdown by file
   status: 'PASSED' | 'FAILED' | 'SKIPPED';
   errorMessage?: string;
   timestamp: string;
@@ -24,15 +30,23 @@ export class ReportGenerator {
     const workbook = XLSX.utils.book_new();
 
     // Prepare data for Excel
-    const excelData = this.results.map(result => ({
-      'Question Number': result.questionNumber,
-      'Question Text': result.questionText,
-      'Code': result.code,
-      'Status': result.status,
-      'Error Message': result.errorMessage || '',
-      'Timestamp': result.timestamp,
-      'Gemini Remarks': result.geminiRemarks || ''
-    }));
+    const excelData = this.results.map(result => {
+      // Add file indicator to code column if multiple files exist
+      let codeValue = result.code;
+      if (result.codeFiles && result.codeFiles.length > 1) {
+        codeValue = `[${result.codeFiles.length} files] ${codeValue}`;
+      }
+      
+      return {
+        'Question Number': result.questionNumber,
+        'Question Text': result.questionText,
+        'Code': codeValue,
+        'Status': result.status,
+        'Error Message': result.errorMessage || '',
+        'Timestamp': result.timestamp,
+        'Gemini Remarks': result.geminiRemarks || ''
+      };
+    });
 
     // Create worksheet
     const worksheet = XLSX.utils.json_to_sheet(excelData);

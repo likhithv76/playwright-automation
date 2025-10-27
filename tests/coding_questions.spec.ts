@@ -1,11 +1,11 @@
 import { test as base, expect } from '@playwright/test';
-import { ReportGenerator, QuestionResult } from '../utils/reportGenerator';
+import { ReportGenerator, QuestionResult, CodeFile } from '../utils/reportGenerator';
 import { GeminiAnalyzer } from '../utils/geminiAnalyzer';
 import * as fs from 'fs';
 import * as path from 'path';
 
 const BASE_URL = process.env.BASE_URL || 'https://lms.exskilence.com';
-const TARGET_PATH = process.env.TARGET_PATH || '/testing/coding/ht';
+const TARGET_PATH = process.env.TARGET_PATH || '/testing/coding/cs';
 const AUTH_DIR = path.join(__dirname, '..', 'playwright', '.auth');
 const STORAGE_PATH = path.join(AUTH_DIR, 'user.json');
 
@@ -374,10 +374,110 @@ async function solveQuestion(page, questionNumber, reportGenerator) {
 
     // Try to get code using the provided XPath
     try {
-      const codeElement = page.locator('xpath=/html/body/div/div/div[3]/div[2]/div/div/div/div/div/div/div/div[3]/div[1]/div[2]/div/div/div[2]/div[2]');
-      await codeElement.waitFor({ timeout: 2000 });
-      result.code = (await codeElement.inputValue()) || 'Code not captured';
-      console.log(`Extracted code for Q${questionNumber}: ${result.code.substring(0, 50)}...`);
+      // First, try to detect multiple file buttons
+      const fileButtonsContainer = page.locator('xpath=/html/body/div/div/div[3]/div[2]/div/div/div/div/div/div/div/div[3]/div[1]/div[1]/div/div');
+      
+      let hasMultipleFiles = false;
+      try {
+        await fileButtonsContainer.waitFor({ timeout: 1000 });
+        const buttons = await fileButtonsContainer.locator('button').all();
+        hasMultipleFiles = buttons.length > 0;
+        console.log(`Found ${buttons.length} file buttons for Q${questionNumber}`);
+      } catch (e) {
+        // No file buttons found, proceed with single file extraction
+      }
+
+      if (hasMultipleFiles) {
+        // Multiple files scenario
+        console.log(`Detected multiple code files for Q${questionNumber}`);
+        const codeFiles: Array<{fileName: string, code: string}> = [];
+        
+        const buttons = await fileButtonsContainer.locator('button').all();
+        
+        for (let i = 0; i < buttons.length; i++) {
+          try {
+            const button = buttons[i];
+            const fileName = await button.textContent();
+            
+            if (fileName && fileName.trim()) {
+              console.log(`Clicking file button for: ${fileName.trim()}`);
+              // Click the button to load the file
+              await button.click();
+              await page.waitForTimeout(1000); // Wait for content to load
+              
+              // Try multiple approaches to get code
+              let fileCode = '';
+              
+              // Approach 1: Original XPath
+              try {
+                const codeElement = page.locator('xpath=/html/body/div/div/div[3]/div[2]/div/div/div/div/div/div/div/div[3]/div[1]/div[2]/div/div/div[2]/div[2]');
+                fileCode = (await codeElement.inputValue({ timeout: 2000 })) || '';
+              } catch (e) {
+                console.log(`XPath approach failed for ${fileName}, trying fallback...`);
+              }
+              
+              // Approach 2: Fallback selectors
+              if (!fileCode) {
+                const fallbackSelectors = ['.ace_text-input', 'textarea', '[contenteditable="true"]'];
+                for (const selector of fallbackSelectors) {
+                  try {
+                    const element = page.locator(selector).first();
+                    if (await element.isVisible({ timeout: 1000 })) {
+                      fileCode = await element.inputValue().catch(() => '') || '';
+                      if (!fileCode) {
+                        fileCode = await element.textContent().catch(() => '') || '';
+                      }
+                      if (fileCode) {
+                        console.log(`Got code using fallback selector: ${selector}`);
+                        break;
+                      }
+                    }
+                  } catch (err) {
+                    continue;
+                  }
+                }
+              }
+              
+              // Approach 3: Try to find by class name or other attributes
+              if (!fileCode) {
+                try {
+                  const element = page.locator('[role="textbox"]').or(page.locator('.ace_text-input'));
+                  if (await element.isVisible({ timeout: 1000 })) {
+                    fileCode = await element.inputValue().catch(() => '') || '';
+                  }
+                } catch (err) {
+                  // Continue
+                }
+              }
+              
+              if (fileCode && fileCode.trim()) {
+                codeFiles.push({ fileName: fileName.trim(), code: fileCode.trim() });
+                console.log(`Extracted code from ${fileName.trim()}: ${fileCode.length} characters`);
+              } else {
+                console.log(`No code found for ${fileName.trim()}`);
+              }
+            }
+          } catch (e) {
+            console.log(`Failed to extract code from file button ${i + 1}: ${e.message}`);
+          }
+        }
+        
+        if (codeFiles.length > 0) {
+          result.codeFiles = codeFiles;
+          // Format code with file names for display
+          result.code = codeFiles.map(file => `=== ${file.fileName} ===\n${file.code}`).join('\n\n');
+          console.log(`Successfully extracted ${codeFiles.length} file(s) for Q${questionNumber}`);
+        } else {
+          result.code = 'Code not captured from multiple files';
+          console.log(`Failed to extract any code from multiple files for Q${questionNumber}`);
+        }
+      } else {
+        // Single file scenario - use original XPath
+        const codeElement = page.locator('xpath=/html/body/div/div/div[3]/div[2]/div/div/div/div/div/div/div/div[3]/div[1]/div[2]/div/div/div[2]/div[2]');
+        await codeElement.waitFor({ timeout: 2000 });
+        result.code = (await codeElement.inputValue()) || 'Code not captured';
+        console.log(`Extracted code for Q${questionNumber}: ${result.code.substring(0, 50)}...`);
+      }
     } catch (e) {
       console.log(`Primary XPath failed for code extraction Q${questionNumber}, trying fallback selectors...`);
       
@@ -540,6 +640,7 @@ test('Solve all coding questions', async ({ page, context }) => {
   await navigateToCodingQuestions(page);
 
   const reportGenerator = new ReportGenerator();
+  const geminiAnalyzer = new GeminiAnalyzer();
   
   // Dynamically detect total number of questions
   const totalQuestions = await detectTotalQuestions(page);
@@ -579,6 +680,9 @@ test('Solve all coding questions', async ({ page, context }) => {
           errorMessage: 'Failed to navigate to question'
         } as QuestionResult;
         reportGenerator.addResult(result);
+        
+        // Skip Gemini analysis for failed navigation
+        result.geminiRemarks = 'Skipped - navigation failed';
         continue;
       }
     }
@@ -619,7 +723,51 @@ test('Solve all coding questions', async ({ page, context }) => {
             errorMessage: `Failed after ${maxRetries} retries due to: ${result.errorMessage}`
           } as QuestionResult;
           reportGenerator.addResult(skipResult);
+          skipResult.geminiRemarks = 'Skipped - retry exhausted';
         }
+      }
+    }
+    
+    // Perform Gemini analysis on the current question's result
+    console.log(`\n=== Running Gemini Analysis for Q${i} ===`);
+    const currentResult = reportGenerator.results[reportGenerator.results.length - 1];
+    
+    // Skip analysis if already processed or if insufficient data
+    if (currentResult) {
+      if (currentResult.geminiRemarks) {
+        console.log(`Skipping Gemini analysis for Q${i} - already processed`);
+      } else if (currentResult.questionText && currentResult.code && 
+                 currentResult.code !== 'Code not captured' && 
+                 currentResult.code !== 'Navigation failed' && 
+                 currentResult.code !== 'Retry exhausted') {
+        try {
+          console.log(`Analyzing ${currentResult.questionNumber}...`);
+          
+          // Pass codeFiles if available, otherwise pass single code string
+          const analysisPromise = currentResult.codeFiles 
+            ? geminiAnalyzer.analyzeQuestionAndCode(
+                currentResult.questionText, 
+                currentResult.code, 
+                currentResult.codeFiles
+              )
+            : geminiAnalyzer.analyzeQuestionAndCode(
+                currentResult.questionText, 
+                currentResult.code
+              );
+          
+          const timeoutPromise = new Promise((_, reject) => 
+            setTimeout(() => reject(new Error('Timeout')), 30000)
+          );
+          const analysis = await Promise.race([analysisPromise, timeoutPromise]) as any;
+          currentResult.geminiRemarks = analysis.remarks;
+          console.log(`${currentResult.questionNumber}: ${analysis.remarks.substring(0, 50)}...`);
+        } catch (error) {
+          console.error(`Gemini analysis failed for ${currentResult.questionNumber}`);
+          currentResult.geminiRemarks = 'Analysis timeout or failed';
+        }
+      } else {
+        console.log(`Skipping Gemini analysis for Q${i} - insufficient data`);
+        currentResult.geminiRemarks = 'Skipped - insufficient data';
       }
     }
     
@@ -690,50 +838,6 @@ test('Solve all coding questions', async ({ page, context }) => {
     }
   }
 
-  console.log('\n=== Running Gemini Analysis ===');
-  const geminiAnalyzer = new GeminiAnalyzer();
-  
-  // Perform Gemini analysis on all results
-  let requestCount = 0;
-  for (const result of reportGenerator.results) {
-    if (result.questionText && result.code && result.code !== 'Code not captured') {
-      try {
-        console.log(`Analyzing ${result.questionNumber}...`);
-        const analysisPromise = geminiAnalyzer.analyzeQuestionAndCode(result.questionText, result.code);
-        const timeoutPromise = new Promise((_, reject) => 
-          setTimeout(() => reject(new Error('Timeout')), 30000)
-        );
-        const analysis = await Promise.race([analysisPromise, timeoutPromise]) as any;
-        result.geminiRemarks = analysis.remarks;
-        console.log(`${result.questionNumber}: ${analysis.remarks.substring(0, 50)}...`);
-        
-        requestCount++;
-        
-        // Add 20 second delay after every 10 requests to avoid rate limits
-        if (requestCount % 10 === 0) {
-          console.log(`\nProcessed ${requestCount} requests. Waiting 20 seconds to avoid rate limits...`);
-          await page.waitForTimeout(20000);
-          console.log('Resuming analysis...\n');
-        }
-      } catch (error) {
-        console.error(`Gemini analysis failed for ${result.questionNumber}`);
-        result.geminiRemarks = 'Analysis timeout or failed';
-        
-        requestCount++;
-        
-        // Also count failed requests for rate limit management
-        if (requestCount % 10 === 0) {
-          console.log(`\nProcessed ${requestCount} requests. Waiting 20 seconds to avoid rate limits...`);
-          await page.waitForTimeout(20000);
-          console.log('Resuming analysis...\n');
-        }
-      }
-    } else {
-      result.geminiRemarks = 'Skipped - insufficient data';
-    }
-  }
-  
-  // Regenerate report with Gemini remarks
   console.log('\n=== Generating Final Report with Gemini Remarks ===');
   const reportPath = reportGenerator.generateExcelReport();
   const summary = reportGenerator.getSummary();
