@@ -3,6 +3,10 @@ import { ReportGenerator, QuestionResult, CodeFile } from '../utils/reportGenera
 import { GeminiAnalyzer } from '../utils/geminiAnalyzer';
 import * as fs from 'fs';
 import * as path from 'path';
+import * as dotenv from 'dotenv';
+
+// Load environment variables from .env file
+dotenv.config();
 
 const BASE_URL = process.env.BASE_URL || 'https://lms.exskilence.com';
 const TARGET_PATH = process.env.TARGET_PATH || '/testing/coding/cs';
@@ -807,7 +811,7 @@ test('Solve all coding questions', async ({ page, context }) => {
             const analysis = await Promise.race([analysisPromise, timeoutPromise]) as any;
             currentResult.geminiStatus = analysis.status;
             currentResult.geminiRemarks = analysis.remarks;
-            console.log(`${currentResult.questionNumber}: ${analysis.status} - ${analysis.remarks.substring(0, 50)}...`);
+            console.log(`${currentResult.questionNumber}: ${analysis.status} - ${analysis.remarks}`);
             
             // Throttle: Add delay every 15 questions to prevent rate limiting
             if (i % 15 === 0 && i < totalQuestions) {

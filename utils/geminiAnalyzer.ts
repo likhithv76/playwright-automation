@@ -74,18 +74,14 @@ export class GeminiAnalyzer {
             codeContent = `\`\`\`\n${code}\n\`\`\``;
           }
 
-          const prompt = `Analyze if the question and code solution match.
+          const prompt = `Does the code solve the question correctly?
 
-Question: "${questionText}"
+Question: ${questionText.substring(0, 200)}
 
-Code:
-${codeContent}
+Code: ${codeContent.substring(0, 500)}
 
-Provide a JSON response with:
-1. "status": One keyword: "MATCH", "DOESNT_MATCH", "PARTIAL", or "NEEDS_REVIEW"
-2. "remarks": Brief explanation (max 50 words)
-
-JSON Format: {"status": "...", "remarks": "..."}`;
+Reply with JSON:
+{"status": "MATCH" or "DOESNT_MATCH" or "PARTIAL", "remarks": "short explanation in simple words"}`;
 
           const result = await model.generateContent(prompt);
           const response = result.response;
@@ -112,7 +108,8 @@ JSON Format: {"status": "...", "remarks": "..."}`;
               } else if (lowerText.includes('partial') || lowerText.includes('mostly')) {
                 status = 'PARTIAL';
               }
-              remarks = rawText.substring(0, 200);
+              // Don't truncate remarks
+              remarks = rawText;
             }
           } catch (e) {
             // If parsing fails, use fallback logic
@@ -124,7 +121,8 @@ JSON Format: {"status": "...", "remarks": "..."}`;
             } else if (lowerText.includes('partial')) {
               status = 'PARTIAL';
             }
-            remarks = rawText.substring(0, 200);
+            // Don't truncate remarks
+            remarks = rawText;
           }
 
           const isValid = !remarks.toLowerCase().includes('skip') && 
@@ -134,7 +132,7 @@ JSON Format: {"status": "...", "remarks": "..."}`;
           
           return {
             status,
-            remarks: remarks.substring(0, 200),
+            remarks: remarks, // No truncation
             isValid
           };
 

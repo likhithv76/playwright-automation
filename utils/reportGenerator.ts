@@ -62,7 +62,7 @@ export class ReportGenerator {
       { wch: 30 }, // Error Message
       { wch: 20 }, // Timestamp
       { wch: 15 }, // Gemini Status
-      { wch: 50 }  // Gemini Remarks
+      { wch: 150 }  // Gemini Remarks (increased for full text)
     ];
     worksheet['!cols'] = columnWidths;
 
