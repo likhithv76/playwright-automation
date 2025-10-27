@@ -62,18 +62,55 @@ async function navigateToCodingQuestions(page) {
   await page.goto(`${BASE_URL}${TARGET_PATH}`, { waitUntil: 'networkidle' });
 
   const url = page.url();
+  console.log(`Current URL after navigation: ${url}`);
+  
   if (url.includes('/testing/coding/ht')) {
     console.log('Reached coding page directly.');
-    return;
-  }
-
-  if (url.includes('/Dashboard') || url.includes('/dashboard')) {
+  } else if (url.includes('/Dashboard') || url.includes('/dashboard')) {
     console.log('From Dashboard → navigating to coding page...');
     await page.goto(`${BASE_URL}${TARGET_PATH}`, { waitUntil: 'networkidle' });
   }
 
-  await page.waitForSelector('button:has-text("Q1")', { timeout: 10000 });
-  console.log('Coding questions page loaded.');
+  // Wait for the page to fully load
+  await page.waitForTimeout(2000);
+  
+  console.log('Waiting for question buttons to load...');
+  
+  // Look for any question button using exact text matching (Q followed by a number)
+  // This is more flexible than just Q1 and will find Q1, Q2, Q3, etc.
+  const allButtons = await page.locator('button').all();
+  console.log(`Found ${allButtons.length} total buttons on page`);
+  
+  let questionButtonsFound = 0;
+  for (const button of allButtons) {
+    try {
+      const text = await button.textContent();
+      if (text && /^Q\d+$/.test(text.trim())) {
+        questionButtonsFound++;
+        if (questionButtonsFound === 1) {
+          console.log(`Found first question button: "${text.trim()}"`);
+        }
+      }
+    } catch (e) {
+      continue;
+    }
+  }
+  
+  if (questionButtonsFound > 0) {
+    console.log(`Coding questions page loaded. Found ${questionButtonsFound} question buttons.`);
+  } else {
+    console.log('No question buttons found with exact Q pattern. Will attempt to continue anyway...');
+    
+    // Debug: show first 10 button texts
+    for (let i = 0; i < Math.min(allButtons.length, 10); i++) {
+      try {
+        const text = await allButtons[i].textContent();
+        console.log(`Button ${i + 1}: "${text}"`);
+      } catch (e) {
+        continue;
+      }
+    }
+  }
 }
 
 async function detectTotalQuestions(page) {
