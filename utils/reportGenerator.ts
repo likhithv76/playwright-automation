@@ -26,7 +26,7 @@ export class ReportGenerator {
     this.results.push(result);
   }
 
-  generateExcelReport(filename: string = 'report.xlsx') {
+  generateExcelReport(customFilename?: string) {
     // Create workbook
     const workbook = XLSX.utils.book_new();
 
@@ -73,6 +73,13 @@ export class ReportGenerator {
     const reportsDir = path.join(process.cwd(), 'reports');
     if (!fs.existsSync(reportsDir)) {
       fs.mkdirSync(reportsDir, { recursive: true });
+    }
+
+    // Generate filename with timestamp if not provided
+    let filename = customFilename;
+    if (!filename) {
+      const timestamp = new Date().toISOString().replace(/[:.]/g, '-').slice(0, 19);
+      filename = `report-${timestamp}.xlsx`;
     }
 
     // Write file
