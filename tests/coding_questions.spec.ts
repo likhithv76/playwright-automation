@@ -189,7 +189,7 @@ async function verifyNextQuestionExists(page, currentQuestionNumber) {
         const isVisible = await button.isVisible({ timeout: 2000 });
         console.log(`Selector "${selector}" visibility: ${isVisible}`);
         if (isVisible) {
-          console.log(`✅ Q${currentQuestionNumber + 1} exists`);
+          console.log(`Q${currentQuestionNumber + 1} exists`);
           return true;
         }
       } catch (e) {
@@ -557,7 +557,7 @@ test('Solve all coding questions', async ({ page, context }) => {
       // Check if question failed due to errors (not just wrong answer)
       if (result.errorMessage && retryCount < maxRetries) {
         retryCount++;
-        console.log(`❌ Q${i} failed with error: ${result.errorMessage.substring(0, 100)}`);
+        console.log(`Q${i} failed with error: ${result.errorMessage.substring(0, 100)}`);
         console.log(`Retrying Q${i} (attempt ${retryCount}/${maxRetries})...`);
         
         // Remove the failed result from report
@@ -571,7 +571,7 @@ test('Solve all coding questions', async ({ page, context }) => {
         
         // If max retries reached and still failed, mark as SKIPPED
         if (result.errorMessage && retryCount === maxRetries) {
-          console.log(`❌ Q${i} failed after ${maxRetries} retries, marking as SKIPPED`);
+          console.log(`Q${i} failed after ${maxRetries} retries, marking as SKIPPED`);
           reportGenerator.results.pop(); // Remove the last failed result
           const skipResult = {
             questionNumber: `Q${i}`,
@@ -657,6 +657,7 @@ test('Solve all coding questions', async ({ page, context }) => {
   const geminiAnalyzer = new GeminiAnalyzer();
   
   // Perform Gemini analysis on all results
+  let requestCount = 0;
   for (const result of reportGenerator.results) {
     if (result.questionText && result.code && result.code !== 'Code not captured') {
       try {
@@ -667,10 +668,28 @@ test('Solve all coding questions', async ({ page, context }) => {
         );
         const analysis = await Promise.race([analysisPromise, timeoutPromise]) as any;
         result.geminiRemarks = analysis.remarks;
-        console.log(`✅ ${result.questionNumber}: ${analysis.remarks.substring(0, 50)}...`);
+        console.log(`${result.questionNumber}: ${analysis.remarks.substring(0, 50)}...`);
+        
+        requestCount++;
+        
+        // Add 20 second delay after every 10 requests to avoid rate limits
+        if (requestCount % 10 === 0) {
+          console.log(`\nProcessed ${requestCount} requests. Waiting 20 seconds to avoid rate limits...`);
+          await page.waitForTimeout(20000);
+          console.log('Resuming analysis...\n');
+        }
       } catch (error) {
-        console.error(`❌ Gemini analysis failed for ${result.questionNumber}`);
+        console.error(`Gemini analysis failed for ${result.questionNumber}`);
         result.geminiRemarks = 'Analysis timeout or failed';
+        
+        requestCount++;
+        
+        // Also count failed requests for rate limit management
+        if (requestCount % 10 === 0) {
+          console.log(`\nProcessed ${requestCount} requests. Waiting 20 seconds to avoid rate limits...`);
+          await page.waitForTimeout(20000);
+          console.log('Resuming analysis...\n');
+        }
       }
     } else {
       result.geminiRemarks = 'Skipped - insufficient data';
