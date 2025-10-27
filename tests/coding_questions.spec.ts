@@ -622,6 +622,50 @@ async function solveQuestion(page, questionNumber, reportGenerator) {
 }
 
 test('Solve all coding questions', async ({ page, context }) => {
+  const reportGenerator = new ReportGenerator();
+  const geminiAnalyzer = new GeminiAnalyzer();
+  
+  // Track if we should generate report on exit
+  let reportGenerated = false;
+  
+  // Add signal handlers to catch interruptions
+  const generatePartialReport = () => {
+    if (!reportGenerated && reportGenerator.results.length > 0) {
+      console.log('\n\n=== Test Interrupted - Generating Partial Report ===');
+      try {
+        const reportPath = reportGenerator.generateExcelReport();
+        const summary = reportGenerator.getSummary();
+
+        console.log('\n=== PARTIAL SUMMARY ===');
+        console.log(`Questions Processed: ${summary.total}`);
+        console.log(`Passed: ${summary.passed}`);
+        console.log(`Failed: ${summary.failed}`);
+        console.log(`Skipped: ${summary.skipped}`);
+        console.log(`Success Rate: ${summary.successRate}%`);
+        console.log(`\nReport saved to: ${reportPath}`);
+        reportGenerated = true;
+      } catch (err) {
+        console.error('Failed to generate partial report:', err.message);
+      }
+    }
+  };
+  
+  // Handle SIGINT (Ctrl+C) and other termination signals
+  const onSIGINT = () => {
+    console.log('\n\nSIGINT received - generating partial report...');
+    generatePartialReport();
+    process.exit(0);
+  };
+  
+  const onSIGTERM = () => {
+    console.log('\n\nSIGTERM received - generating partial report...');
+    generatePartialReport();
+    process.exit(0);
+  };
+  
+  process.on('SIGINT', onSIGINT);
+  process.on('SIGTERM', onSIGTERM);
+  
   await page.addInitScript(() => {
     Object.defineProperty(navigator, 'webdriver', { get: () => undefined });
   });
@@ -638,214 +682,255 @@ test('Solve all coding questions', async ({ page, context }) => {
   }
 
   await navigateToCodingQuestions(page);
-
-  const reportGenerator = new ReportGenerator();
-  const geminiAnalyzer = new GeminiAnalyzer();
   
-  // Dynamically detect total number of questions
-  const totalQuestions = await detectTotalQuestions(page);
-  console.log(`Total questions detected: ${totalQuestions}`);
+  try {
+    // Dynamically detect total number of questions
+    const totalQuestions = await detectTotalQuestions(page);
+    console.log(`Total questions detected: ${totalQuestions}`);
 
-  // Navigate to Q1 to start
-  const navigationSuccess = await navigateToQuestion(page, 1);
-  if (!navigationSuccess) {
-    console.log('Failed to navigate to Q1, trying fallback...');
-    await page.getByRole('button', { name: 'Q1', exact: true }).click();
-  }
-  console.log('Starting with Q1...');
+    const navigationSuccess = await navigateToQuestion(page, 1);
+    if (!navigationSuccess) {
+      console.log('Failed to navigate to Q1, trying fallback...');
+      await page.getByRole('button', { name: 'Q1', exact: true }).click();
+    }
+    console.log('Starting with Q1...');
 
-  for (let i = 1; i <= totalQuestions; i++) {
-    console.log(`\n=== Processing Q${i} ===`);
-    
-    // Navigate to the question if we're not already on it
-    if (i > 1) {
-      const navSuccess = await navigateToQuestion(page, i);
-      if (!navSuccess) {
-        console.log(`Failed to navigate to Q${i}, checking if it exists...`);
+    for (let i = 1; i <= totalQuestions; i++) {
+      console.log(`\n=== Processing Q${i} ===`);
+      
+      // Navigate to the question if we're not already on it
+      if (i > 1) {
+        const navSuccess = await navigateToQuestion(page, i);
+        if (!navSuccess) {
+          console.log(`Failed to navigate to Q${i}, checking if it exists...`);
+          
+          // Verify if the question actually exists
+          const questionExists = await verifyNextQuestionExists(page, i - 1);
+          if (!questionExists) {
+            console.log(`Q${i} does not exist. Completed all available questions!`);
+            break;
+          }
+          
+          console.log(`Q${i} exists but navigation failed, skipping...`);
+          const result = {
+            questionNumber: `Q${i}`,
+            questionText: `Question ${i}`,
+            code: 'Navigation failed',
+            status: 'SKIPPED',
+            timestamp: new Date().toISOString(),
+            errorMessage: 'Failed to navigate to question'
+          } as QuestionResult;
+          reportGenerator.addResult(result);
+          
+          // Skip Gemini analysis for failed navigation
+          result.geminiRemarks = 'Skipped - navigation failed';
+          continue;
+        }
+      }
+      
+      // Retry logic for solving questions (max 2 retries)
+      let retryCount = 0;
+      const maxRetries = 2;
+      let skipToNext = false;
+      
+      while (retryCount <= maxRetries && !skipToNext) {
+        const result = await solveQuestion(page, i, reportGenerator);
         
-        // Verify if the question actually exists
-        const questionExists = await verifyNextQuestionExists(page, i - 1);
-        if (!questionExists) {
-          console.log(`Q${i} does not exist. Completed all available questions!`);
+        // Check if question failed due to errors (not just wrong answer)
+        if (result.errorMessage && retryCount < maxRetries) {
+          retryCount++;
+          console.log(`Q${i} failed with error: ${result.errorMessage.substring(0, 100)}`);
+          console.log(`Retrying Q${i} (attempt ${retryCount}/${maxRetries})...`);
+          
+          // Remove the failed result from report
+          reportGenerator.results.pop();
+          
+          await page.waitForTimeout(500); // Wait before retry
+          // Try to re-navigate to the question
+          await navigateToQuestion(page, i);
+        } else {
+          skipToNext = true;
+          
+          // If max retries reached and still failed, mark as SKIPPED
+          if (result.errorMessage && retryCount === maxRetries) {
+            console.log(`Q${i} failed after ${maxRetries} retries, marking as SKIPPED`);
+            reportGenerator.results.pop(); // Remove the last failed result
+            const skipResult = {
+              questionNumber: `Q${i}`,
+              questionText: result.questionText || `Question ${i}`,
+              code: 'Retry exhausted',
+              status: 'SKIPPED' as const,
+              timestamp: new Date().toISOString(),
+              errorMessage: `Failed after ${maxRetries} retries due to: ${result.errorMessage}`
+            } as QuestionResult;
+            reportGenerator.addResult(skipResult);
+            skipResult.geminiRemarks = 'Skipped - retry exhausted';
+          }
+        }
+      }
+      
+      // Perform Gemini analysis on the current question's result
+      console.log(`\n=== Running Gemini Analysis for Q${i} ===`);
+      const currentResult = reportGenerator.results[reportGenerator.results.length - 1];
+      
+      // Skip analysis if already processed or if insufficient data
+      if (currentResult) {
+        if (currentResult.geminiRemarks) {
+          console.log(`Skipping Gemini analysis for Q${i} - already processed`);
+        } else if (currentResult.questionText && currentResult.code && 
+                   currentResult.code !== 'Code not captured' && 
+                   currentResult.code !== 'Navigation failed' && 
+                   currentResult.code !== 'Retry exhausted') {
+          try {
+            console.log(`Analyzing ${currentResult.questionNumber}...`);
+            
+            // Pass codeFiles if available, otherwise pass single code string
+            const analysisPromise = currentResult.codeFiles 
+              ? geminiAnalyzer.analyzeQuestionAndCode(
+                  currentResult.questionText, 
+                  currentResult.code, 
+                  currentResult.codeFiles
+                )
+              : geminiAnalyzer.analyzeQuestionAndCode(
+                  currentResult.questionText, 
+                  currentResult.code
+                );
+            
+            const timeoutPromise = new Promise((_, reject) => 
+              setTimeout(() => reject(new Error('Timeout')), 30000)
+            );
+            const analysis = await Promise.race([analysisPromise, timeoutPromise]) as any;
+            currentResult.geminiRemarks = analysis.remarks;
+            console.log(`${currentResult.questionNumber}: ${analysis.remarks.substring(0, 50)}...`);
+          } catch (error) {
+            console.error(`Gemini analysis failed for ${currentResult.questionNumber}`);
+            currentResult.geminiRemarks = 'Analysis timeout or failed';
+          }
+        } else {
+          console.log(`Skipping Gemini analysis for Q${i} - insufficient data`);
+          currentResult.geminiRemarks = 'Skipped - insufficient data';
+        }
+      }
+      
+      // Check if there's a next question before trying to navigate
+      if (i < totalQuestions) {
+        const nextQuestionExists = await verifyNextQuestionExists(page, i);
+        
+        if (!nextQuestionExists) {
+          console.log(`No more questions after Q${i}. Completed all available questions!`);
           break;
         }
         
-        console.log(`Q${i} exists but navigation failed, skipping...`);
-        const result = {
-          questionNumber: `Q${i}`,
-          questionText: `Question ${i}`,
-          code: 'Navigation failed',
-          status: 'SKIPPED',
-          timestamp: new Date().toISOString(),
-          errorMessage: 'Failed to navigate to question'
-        } as QuestionResult;
-        reportGenerator.addResult(result);
+        console.log(`Looking for NEXT button to move to Q${i + 1}...`);
         
-        // Skip Gemini analysis for failed navigation
-        result.geminiRemarks = 'Skipped - navigation failed';
-        continue;
-      }
-    }
-    
-    // Retry logic for solving questions (max 2 retries)
-    let retryCount = 0;
-    const maxRetries = 2;
-    let skipToNext = false;
-    
-    while (retryCount <= maxRetries && !skipToNext) {
-      const result = await solveQuestion(page, i, reportGenerator);
-      
-      // Check if question failed due to errors (not just wrong answer)
-      if (result.errorMessage && retryCount < maxRetries) {
-        retryCount++;
-        console.log(`Q${i} failed with error: ${result.errorMessage.substring(0, 100)}`);
-        console.log(`Retrying Q${i} (attempt ${retryCount}/${maxRetries})...`);
+        // Try multiple selectors for the NEXT button
+        const nextButtonSelectors = [
+          '/html/body/div/div/div[3]/div[2]/div/div/div/div/div/div/div/div[3]/div[2]/div/div[2]/button[2]',
+          'button:has-text("NEXT")',
+          'button:has-text("Next")',
+          '[data-testid="next-button"]',
+          'button[aria-label*="next" i]'
+        ];
         
-        // Remove the failed result from report
-        reportGenerator.results.pop();
+        let nextButton: any = null;
+        let nextVisible = false;
         
-        await page.waitForTimeout(500); // Wait before retry
-        // Try to re-navigate to the question
-        await navigateToQuestion(page, i);
-      } else {
-        skipToNext = true;
-        
-        // If max retries reached and still failed, mark as SKIPPED
-        if (result.errorMessage && retryCount === maxRetries) {
-          console.log(`Q${i} failed after ${maxRetries} retries, marking as SKIPPED`);
-          reportGenerator.results.pop(); // Remove the last failed result
-          const skipResult = {
-            questionNumber: `Q${i}`,
-            questionText: result.questionText || `Question ${i}`,
-            code: 'Retry exhausted',
-            status: 'SKIPPED' as const,
-            timestamp: new Date().toISOString(),
-            errorMessage: `Failed after ${maxRetries} retries due to: ${result.errorMessage}`
-          } as QuestionResult;
-          reportGenerator.addResult(skipResult);
-          skipResult.geminiRemarks = 'Skipped - retry exhausted';
-        }
-      }
-    }
-    
-    // Perform Gemini analysis on the current question's result
-    console.log(`\n=== Running Gemini Analysis for Q${i} ===`);
-    const currentResult = reportGenerator.results[reportGenerator.results.length - 1];
-    
-    // Skip analysis if already processed or if insufficient data
-    if (currentResult) {
-      if (currentResult.geminiRemarks) {
-        console.log(`Skipping Gemini analysis for Q${i} - already processed`);
-      } else if (currentResult.questionText && currentResult.code && 
-                 currentResult.code !== 'Code not captured' && 
-                 currentResult.code !== 'Navigation failed' && 
-                 currentResult.code !== 'Retry exhausted') {
-        try {
-          console.log(`Analyzing ${currentResult.questionNumber}...`);
-          
-          // Pass codeFiles if available, otherwise pass single code string
-          const analysisPromise = currentResult.codeFiles 
-            ? geminiAnalyzer.analyzeQuestionAndCode(
-                currentResult.questionText, 
-                currentResult.code, 
-                currentResult.codeFiles
-              )
-            : geminiAnalyzer.analyzeQuestionAndCode(
-                currentResult.questionText, 
-                currentResult.code
-              );
-          
-          const timeoutPromise = new Promise((_, reject) => 
-            setTimeout(() => reject(new Error('Timeout')), 30000)
-          );
-          const analysis = await Promise.race([analysisPromise, timeoutPromise]) as any;
-          currentResult.geminiRemarks = analysis.remarks;
-          console.log(`${currentResult.questionNumber}: ${analysis.remarks.substring(0, 50)}...`);
-        } catch (error) {
-          console.error(`Gemini analysis failed for ${currentResult.questionNumber}`);
-          currentResult.geminiRemarks = 'Analysis timeout or failed';
-        }
-      } else {
-        console.log(`Skipping Gemini analysis for Q${i} - insufficient data`);
-        currentResult.geminiRemarks = 'Skipped - insufficient data';
-      }
-    }
-    
-    // Check if there's a next question before trying to navigate
-    if (i < totalQuestions) {
-      const nextQuestionExists = await verifyNextQuestionExists(page, i);
-      
-      if (!nextQuestionExists) {
-        console.log(`No more questions after Q${i}. Completed all available questions!`);
-        break;
-      }
-      
-      console.log(`Looking for NEXT button to move to Q${i + 1}...`);
-      
-      // Try multiple selectors for the NEXT button
-      const nextButtonSelectors = [
-        '/html/body/div/div/div[3]/div[2]/div/div/div/div/div/div/div/div[3]/div[2]/div/div[2]/button[2]',
-        'button:has-text("NEXT")',
-        'button:has-text("Next")',
-        '[data-testid="next-button"]',
-        'button[aria-label*="next" i]'
-      ];
-      
-      let nextButton: any = null;
-      let nextVisible = false;
-      
-      for (const selector of nextButtonSelectors) {
-        try {
-      const button = selector.startsWith('/') 
-        ? page.locator(`xpath=${selector}`)
-        : page.locator(selector);
-      nextVisible = await button.isVisible({ timeout: 1000 }).catch(() => false);
-          if (nextVisible) {
-            nextButton = button;
-            console.log(`Found NEXT button with selector: ${selector}`);
-            break;
+        for (const selector of nextButtonSelectors) {
+          try {
+            const button = selector.startsWith('/') 
+              ? page.locator(`xpath=${selector}`)
+              : page.locator(selector);
+            nextVisible = await button.isVisible({ timeout: 1000 }).catch(() => false);
+            if (nextVisible) {
+              nextButton = button;
+              console.log(`Found NEXT button with selector: ${selector}`);
+              break;
+            }
+          } catch (e) {
+            // Continue to next selector
           }
-        } catch (e) {
-          // Continue to next selector
         }
-      }
-      
-      if (nextVisible && nextButton) {
-        try {
-          await nextButton.click();
-          console.log(`Moving to Q${i + 1}...`);
-          await page.waitForTimeout(500); // Wait for page to load
-        } catch (e) {
-          console.log(`Failed to click NEXT button: ${e.message}`);
-          // Don't break here, try direct navigation instead
-          console.log(`Trying direct navigation to Q${i + 1}...`);
+        
+        if (nextVisible && nextButton) {
+          try {
+            await nextButton.click();
+            console.log(`Moving to Q${i + 1}...`);
+            await page.waitForTimeout(500); // Wait for page to load
+          } catch (e) {
+            console.log(`Failed to click NEXT button: ${e.message}`);
+            // Don't break here, try direct navigation instead
+            console.log(`Trying direct navigation to Q${i + 1}...`);
+            const directNavSuccess = await navigateToQuestion(page, i + 1);
+            if (!directNavSuccess) {
+              console.log(`Direct navigation also failed, stopping...`);
+              break;
+            }
+          }
+        } else {
+          console.log('No NEXT button found, trying direct navigation...');
           const directNavSuccess = await navigateToQuestion(page, i + 1);
           if (!directNavSuccess) {
-            console.log(`Direct navigation also failed, stopping...`);
+            console.log(`Direct navigation failed, stopping...`);
             break;
           }
         }
       } else {
-        console.log('No NEXT button found, trying direct navigation...');
-        const directNavSuccess = await navigateToQuestion(page, i + 1);
-        if (!directNavSuccess) {
-          console.log(`Direct navigation failed, stopping...`);
-          break;
-        }
+        console.log('Completed all questions!');
       }
-    } else {
-      console.log('Completed all questions!');
+    }
+
+    console.log('\n=== Generating Final Report with Gemini Remarks ===');
+    const reportPath = reportGenerator.generateExcelReport();
+    const summary = reportGenerator.getSummary();
+    reportGenerated = true;
+
+    console.log('\n=== SUMMARY ===');
+    console.log(`Total: ${summary.total}`);
+    console.log(`Passed: ${summary.passed}`);
+    console.log(`Failed: ${summary.failed}`);
+    console.log(`Success Rate: ${summary.successRate}%`);
+    console.log(`Report: ${reportPath}`);
+  } catch (error) {
+    console.error('\n=== Test interrupted or failed ===');
+    console.error(`Error: ${error.message}`);
+    
+    // Generate partial report if we have any results
+    if (reportGenerator.results.length > 0) {
+      console.log('\n=== Generating Partial Report with Available Data ===');
+      const reportPath = reportGenerator.generateExcelReport();
+      const summary = reportGenerator.getSummary();
+      reportGenerated = true;
+
+      console.log('\n=== PARTIAL SUMMARY ===');
+      console.log(`Total Processed: ${summary.total}`);
+      console.log(`Passed: ${summary.passed}`);
+      console.log(`Failed: ${summary.failed}`);
+      console.log(`Success Rate: ${summary.successRate}%`);
+      console.log(`Report saved to: ${reportPath}`);
+    }
+    
+    throw error;
+  } finally {
+    // Cleanup signal handlers
+    process.off('SIGINT', onSIGINT);
+    process.off('SIGTERM', onSIGTERM);
+    
+    // Generate report if not already generated and we have results
+    if (!reportGenerated && reportGenerator.results.length > 0) {
+      console.log('\n=== Generating Report on Exit ===');
+      try {
+        const reportPath = reportGenerator.generateExcelReport();
+        const summary = reportGenerator.getSummary();
+
+        console.log('\n=== FINAL SUMMARY ===');
+        console.log(`Total: ${summary.total}`);
+        console.log(`Passed: ${summary.passed}`);
+        console.log(`Failed: ${summary.failed}`);
+        console.log(`Success Rate: ${summary.successRate}%`);
+        console.log(`Report: ${reportPath}`);
+      } catch (err) {
+        console.error('Failed to generate report:', err.message);
+      }
     }
   }
-
-  console.log('\n=== Generating Final Report with Gemini Remarks ===');
-  const reportPath = reportGenerator.generateExcelReport();
-  const summary = reportGenerator.getSummary();
-
-  console.log('\n=== SUMMARY ===');
-  console.log(`Total: ${summary.total}`);
-  console.log(`Passed: ${summary.passed}`);
-  console.log(`Failed: ${summary.failed}`);
-  console.log(`Success Rate: ${summary.successRate}%`);
-  console.log(`Report: ${reportPath}`);
 });
