@@ -15,7 +15,8 @@ export interface QuestionResult {
   status: 'PASSED' | 'FAILED' | 'SKIPPED';
   errorMessage?: string;
   timestamp: string;
-  geminiRemarks?: string;
+  geminiStatus?: string;  // Short keyword: MATCH, DOESNT_MATCH, PARTIAL, etc.
+  geminiRemarks?: string; // Full detailed remarks
 }
 
 export class ReportGenerator {
@@ -44,6 +45,7 @@ export class ReportGenerator {
         'Status': result.status,
         'Error Message': result.errorMessage || '',
         'Timestamp': result.timestamp,
+        'Gemini Status': result.geminiStatus || '',
         'Gemini Remarks': result.geminiRemarks || ''
       };
     });
@@ -59,6 +61,7 @@ export class ReportGenerator {
       { wch: 12 }, // Status
       { wch: 30 }, // Error Message
       { wch: 20 }, // Timestamp
+      { wch: 15 }, // Gemini Status
       { wch: 50 }  // Gemini Remarks
     ];
     worksheet['!cols'] = columnWidths;

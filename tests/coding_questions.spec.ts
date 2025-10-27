@@ -723,6 +723,7 @@ test('Solve all coding questions', async ({ page, context }) => {
           reportGenerator.addResult(result);
           
           // Skip Gemini analysis for failed navigation
+          result.geminiStatus = 'SKIPPED';
           result.geminiRemarks = 'Skipped - navigation failed';
           continue;
         }
@@ -764,6 +765,7 @@ test('Solve all coding questions', async ({ page, context }) => {
               errorMessage: `Failed after ${maxRetries} retries due to: ${result.errorMessage}`
             } as QuestionResult;
             reportGenerator.addResult(skipResult);
+            skipResult.geminiStatus = 'SKIPPED';
             skipResult.geminiRemarks = 'Skipped - retry exhausted';
           }
         }
@@ -800,14 +802,17 @@ test('Solve all coding questions', async ({ page, context }) => {
               setTimeout(() => reject(new Error('Timeout')), 30000)
             );
             const analysis = await Promise.race([analysisPromise, timeoutPromise]) as any;
+            currentResult.geminiStatus = analysis.status;
             currentResult.geminiRemarks = analysis.remarks;
-            console.log(`${currentResult.questionNumber}: ${analysis.remarks.substring(0, 50)}...`);
+            console.log(`${currentResult.questionNumber}: ${analysis.status} - ${analysis.remarks.substring(0, 50)}...`);
           } catch (error) {
             console.error(`Gemini analysis failed for ${currentResult.questionNumber}`);
+            currentResult.geminiStatus = 'ERROR';
             currentResult.geminiRemarks = 'Analysis timeout or failed';
           }
         } else {
           console.log(`Skipping Gemini analysis for Q${i} - insufficient data`);
+          currentResult.geminiStatus = 'SKIPPED';
           currentResult.geminiRemarks = 'Skipped - insufficient data';
         }
       }

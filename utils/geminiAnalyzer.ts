@@ -4,7 +4,8 @@ import * as dotenv from 'dotenv';
 dotenv.config();
 
 export interface GeminiAnalysis {
-  remarks: string;
+  status: string;  // Short keyword like "Match confirmed", "Doesn't match", etc.
+  remarks: string;  // Full detailed text
   isValid: boolean;
 }
 
@@ -46,6 +47,7 @@ export class GeminiAnalyzer {
   async analyzeQuestionAndCode(questionText: string, code: string, codeFiles?: Array<{fileName: string, code: string}>): Promise<GeminiAnalysis> {
     if (!this.genAI) {
       return {
+        status: 'SKIPPED',
         remarks: 'Gemini analysis skipped - API key not configured',
         isValid: false
       };
@@ -72,25 +74,58 @@ export class GeminiAnalyzer {
             codeContent = `\`\`\`\n${code}\n\`\`\``;
           }
 
-          const prompt = `You are a code review assistant. Analyze if the following question text matches the provided code solution.
+          const prompt = `Analyze if the question and code solution match.
 
-Question Text: "${questionText}"
+Question: "${questionText}"
 
-Code Solution:
+Code:
 ${codeContent}
 
-Based on your analysis, provide:
-1. A brief assessment (maximum 50 words) about whether the question matches the code
-2. If they match well, say "Match confirmed"
-3. If the question doesn't match the code's intent, say "Question doesn't match code"
-4. If the code doesn't match the question's requirements, say "Code doesn't match question"
-5. If there are other issues, provide a short constructive remark
+Provide a JSON response with:
+1. "status": One keyword: "MATCH", "DOESNT_MATCH", "PARTIAL", or "NEEDS_REVIEW"
+2. "remarks": Brief explanation (max 50 words)
 
-Format your response as a single short sentence starting with your assessment.`;
+JSON Format: {"status": "...", "remarks": "..."}`;
 
           const result = await model.generateContent(prompt);
           const response = result.response;
-          const remarks = response.text().trim();
+          const rawText = response.text().trim();
+          
+          // Try to extract JSON from the response
+          let status = 'NEEDS_REVIEW';
+          let remarks = rawText;
+          
+          try {
+            // Look for JSON in the response
+            const jsonMatch = rawText.match(/\{[\s\S]*\}/);
+            if (jsonMatch) {
+              const parsed = JSON.parse(jsonMatch[0]);
+              status = parsed.status || status;
+              remarks = parsed.remarks || remarks;
+            } else {
+              // Fallback: try to infer status from text
+              const lowerText = rawText.toLowerCase();
+              if (lowerText.includes('match confirmed') || lowerText.includes('matches well') || lowerText.includes('correct')) {
+                status = 'MATCH';
+              } else if (lowerText.includes("doesn't match") || lowerText.includes('wrong') || lowerText.includes('incorrect')) {
+                status = 'DOESNT_MATCH';
+              } else if (lowerText.includes('partial') || lowerText.includes('mostly')) {
+                status = 'PARTIAL';
+              }
+              remarks = rawText.substring(0, 200);
+            }
+          } catch (e) {
+            // If parsing fails, use fallback logic
+            const lowerText = rawText.toLowerCase();
+            if (lowerText.includes('match confirmed') || lowerText.includes('matches well')) {
+              status = 'MATCH';
+            } else if (lowerText.includes("doesn't match") || lowerText.includes('wrong')) {
+              status = 'DOESNT_MATCH';
+            } else if (lowerText.includes('partial')) {
+              status = 'PARTIAL';
+            }
+            remarks = rawText.substring(0, 200);
+          }
 
           const isValid = !remarks.toLowerCase().includes('skip') && 
                           !remarks.toLowerCase().includes('not configured');
@@ -98,6 +133,7 @@ Format your response as a single short sentence starting with your assessment.`;
           console.log(`✓ Gemini analysis successful using ${modelName} (attempt ${attempt})`);
           
           return {
+            status,
             remarks: remarks.substring(0, 200),
             isValid
           };
@@ -126,6 +162,7 @@ Format your response as a single short sentence starting with your assessment.`;
     // All models failed
     console.error('✗ All Gemini models failed after retries');
     return {
+      status: 'ERROR',
       remarks: `Analysis failed: ${lastError ? lastError.message : 'Unknown error'}. Service may be overloaded.`,
       isValid: false
     };
