@@ -54,7 +54,7 @@ export class GeminiAnalyzer {
     }
 
     // Try multiple models in order of preference
-    const models = ['gemini-2.5-flash', 'gemini-pro', 'gemini-1.5-flash'];
+    const models = ['gemini-2.5-flash'];
     let lastError: any = null;
 
     for (const modelName of models) {

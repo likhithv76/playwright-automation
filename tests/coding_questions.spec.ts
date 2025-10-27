@@ -805,10 +805,22 @@ test('Solve all coding questions', async ({ page, context }) => {
             currentResult.geminiStatus = analysis.status;
             currentResult.geminiRemarks = analysis.remarks;
             console.log(`${currentResult.questionNumber}: ${analysis.status} - ${analysis.remarks.substring(0, 50)}...`);
+            
+            // Throttle: Add delay every 15 questions to prevent rate limiting
+            if (i % 15 === 0 && i < totalQuestions) {
+              console.log(`\nProcessed ${i} questions. Adding 10s delay to prevent rate limiting...`);
+              await page.waitForTimeout(10000);
+              console.log('Resuming...\n');
+            }
           } catch (error) {
             console.error(`Gemini analysis failed for ${currentResult.questionNumber}`);
             currentResult.geminiStatus = 'ERROR';
             currentResult.geminiRemarks = 'Analysis timeout or failed';
+            
+            if (i % 10 === 0) {
+              console.log('Adding 5s delay after error to help with rate limits...');
+              await page.waitForTimeout(5000);
+            }
           }
         } else {
           console.log(`Skipping Gemini analysis for Q${i} - insufficient data`);
