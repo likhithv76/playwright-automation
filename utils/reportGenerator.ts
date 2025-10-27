@@ -9,10 +9,11 @@ export interface QuestionResult {
   status: 'PASSED' | 'FAILED' | 'SKIPPED';
   errorMessage?: string;
   timestamp: string;
+  geminiRemarks?: string;
 }
 
 export class ReportGenerator {
-  private results: QuestionResult[] = [];
+  public results: QuestionResult[] = [];
 
   addResult(result: QuestionResult) {
     this.results.push(result);
@@ -29,7 +30,8 @@ export class ReportGenerator {
       'Code': result.code,
       'Status': result.status,
       'Error Message': result.errorMessage || '',
-      'Timestamp': result.timestamp
+      'Timestamp': result.timestamp,
+      'Gemini Remarks': result.geminiRemarks || ''
     }));
 
     // Create worksheet
@@ -42,7 +44,8 @@ export class ReportGenerator {
       { wch: 80 }, // Code
       { wch: 12 }, // Status
       { wch: 30 }, // Error Message
-      { wch: 20 }  // Timestamp
+      { wch: 20 }, // Timestamp
+      { wch: 50 }  // Gemini Remarks
     ];
     worksheet['!cols'] = columnWidths;
 

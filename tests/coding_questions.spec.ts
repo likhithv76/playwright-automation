@@ -1,10 +1,11 @@
 import { test as base, expect } from '@playwright/test';
 import { ReportGenerator, QuestionResult } from '../utils/reportGenerator';
+import { GeminiAnalyzer } from '../utils/geminiAnalyzer';
 import * as fs from 'fs';
 import * as path from 'path';
 
 const BASE_URL = process.env.BASE_URL || 'https://lms.exskilence.com';
-const TARGET_PATH = '/testing/coding/ht';
+const TARGET_PATH = process.env.TARGET_PATH || '/testing/coding/ht';
 const AUTH_DIR = path.join(__dirname, '..', 'playwright', '.auth');
 const STORAGE_PATH = path.join(AUTH_DIR, 'user.json');
 
@@ -71,7 +72,7 @@ async function navigateToCodingQuestions(page) {
     await page.goto(`${BASE_URL}${TARGET_PATH}`, { waitUntil: 'networkidle' });
   }
 
-  await page.waitForSelector('button:has-text("Q1")', { timeout: 60000 });
+  await page.waitForSelector('button:has-text("Q1")', { timeout: 10000 });
   console.log('Coding questions page loaded.');
 }
 
@@ -208,7 +209,7 @@ async function verifyNextQuestionExists(page, currentQuestionNumber) {
         if (text && text.trim() === nextQuestionText) {
           const isVisible = await button.isVisible({ timeout: 1000 });
           if (isVisible) {
-            console.log(`✅ Found exact match for Q${currentQuestionNumber + 1}`);
+            console.log(`Found exact match for Q${currentQuestionNumber + 1}`);
             return true;
           }
         }
@@ -244,7 +245,7 @@ async function navigateToQuestion(page, questionNumber) {
         await button.scrollIntoViewIfNeeded();
         await button.click();
         console.log(`Clicked Q${questionNumber} button`);
-        await page.waitForTimeout(2000); // Wait for question to load
+        await page.waitForTimeout(500); // Wait for question to load
         return true;
       }
     } catch (e) {
@@ -266,7 +267,7 @@ async function navigateToQuestion(page, questionNumber) {
           await button.scrollIntoViewIfNeeded();
           await button.click();
           console.log(`Clicked Q${questionNumber} button via fallback`);
-          await page.waitForTimeout(2000);
+          await page.waitForTimeout(500);
           return true;
         }
       }
@@ -291,12 +292,12 @@ async function solveQuestion(page, questionNumber, reportGenerator) {
 
   try {
     // Wait for page to be stable
-    await page.waitForTimeout(2000);
+    await page.waitForTimeout(500);
 
     // Try to get question text using the provided XPath
     try {
       const questionElement = page.locator('xpath=/html/body/div/div/div[3]/div[2]/div/div/div/div/div/div/div/div[2]/div/div[1]/div');
-      await questionElement.waitFor({ timeout: 5000 });
+      await questionElement.waitFor({ timeout: 2000 });
       result.questionText = (await questionElement.textContent()) || `Question ${questionNumber}`;
       console.log(`Extracted question text for Q${questionNumber}: ${result.questionText.substring(0, 100)}...`);
     } catch (e) {
@@ -314,7 +315,7 @@ async function solveQuestion(page, questionNumber, reportGenerator) {
       for (const selector of fallbackSelectors) {
         try {
           const element = page.locator(selector).first();
-          if (await element.isVisible({ timeout: 2000 })) {
+          if (await element.isVisible({ timeout: 1000 })) {
             const text = await element.textContent();
             if (text && text.trim().length > 0) {
               result.questionText = text;
@@ -337,7 +338,7 @@ async function solveQuestion(page, questionNumber, reportGenerator) {
     // Try to get code using the provided XPath
     try {
       const codeElement = page.locator('xpath=/html/body/div/div/div[3]/div[2]/div/div/div/div/div/div/div/div[3]/div[1]/div[2]/div/div/div[2]/div[2]');
-      await codeElement.waitFor({ timeout: 5000 });
+      await codeElement.waitFor({ timeout: 2000 });
       result.code = (await codeElement.inputValue()) || 'Code not captured';
       console.log(`Extracted code for Q${questionNumber}: ${result.code.substring(0, 50)}...`);
     } catch (e) {
@@ -357,7 +358,7 @@ async function solveQuestion(page, questionNumber, reportGenerator) {
       for (const selector of fallbackSelectors) {
         try {
           const element = page.locator(selector).first();
-          if (await element.isVisible({ timeout: 2000 })) {
+          if (await element.isVisible({ timeout: 1000 })) {
             const code = await element.inputValue().catch(() => 
               element.textContent().catch(() => null)
             );
@@ -384,7 +385,7 @@ async function solveQuestion(page, questionNumber, reportGenerator) {
     const runButtonXPath = '/html/body/div/div/div[3]/div[2]/div/div/div/div/div/div/div/div[3]/div[2]/div/div[2]';
     
     try {
-      await page.waitForSelector(`xpath=${runButtonXPath}`, { timeout: 10000 });
+      await page.waitForSelector(`xpath=${runButtonXPath}`, { timeout: 3000 });
       const runButton = page.locator(`xpath=${runButtonXPath}`);
       
       if (await runButton.isVisible()) {
@@ -406,7 +407,7 @@ async function solveQuestion(page, questionNumber, reportGenerator) {
       for (const selector of fallbackSelectors) {
         try {
           const button = page.locator(selector);
-          if (await button.isVisible({ timeout: 3000 })) {
+          if (await button.isVisible({ timeout: 1000 })) {
             await button.click({ force: true });
             console.log(`Clicked RUN button using fallback selector: ${selector}`);
             runButtonFound = true;
@@ -423,21 +424,21 @@ async function solveQuestion(page, questionNumber, reportGenerator) {
     }
 
     // Wait for page to process the submission
-    await page.waitForTimeout(3000);
+    await page.waitForTimeout(1000);
 
     // Check for success/failure messages using the provided XPath
     console.log(`Checking result for Q${questionNumber}...`);
     const resultXPath = '/html/body/div/div/div[3]/div[2]/div/div/div/div/div/div/div/div[3]/div[2]/div/div[1]/h5';
     
     try {
-      await page.waitForSelector(`xpath=${resultXPath}`, { timeout: 15000 });
+      await page.waitForSelector(`xpath=${resultXPath}`, { timeout: 3000 });
       const resultElement = page.locator(`xpath=${resultXPath}`);
       const resultText = await resultElement.textContent();
       
       if (resultText && resultText.toLowerCase().includes('congratulations')) {
         result.status = 'PASSED';
         console.log(`Passed Q${questionNumber}`);
-      } else if (resultText && resultText.toLowerCase().includes('wrong')) {
+      } else if (resultText && resultText.toLowerCase().includes('Wrong Answer')) {
         result.status = 'FAILED';
         console.log(`Failed Q${questionNumber}`);
       } else {
@@ -450,12 +451,12 @@ async function solveQuestion(page, questionNumber, reportGenerator) {
       // Fallback to text-based selectors
       const success = await page
         .locator('text=Congratulations!, text=Correct')
-        .isVisible({ timeout: 5000 })
+        .isVisible({ timeout: 2000 })
         .catch(() => false);
 
       const failure = await page
         .locator('text=Wrong Answer, text=Incorrect')
-        .isVisible({ timeout: 5000 })
+        .isVisible({ timeout: 2000 })
         .catch(() => false);
 
       if (success) {
@@ -471,7 +472,7 @@ async function solveQuestion(page, questionNumber, reportGenerator) {
     }
 
     // Wait a bit more for page to stabilize before moving to next question
-    await page.waitForTimeout(2000);
+    await page.waitForTimeout(500);
 
   } catch (err) {
     result.status = 'FAILED';
@@ -545,7 +546,45 @@ test('Solve all coding questions', async ({ page, context }) => {
       }
     }
     
-    await solveQuestion(page, i, reportGenerator);
+    // Retry logic for solving questions (max 2 retries)
+    let retryCount = 0;
+    const maxRetries = 2;
+    let skipToNext = false;
+    
+    while (retryCount <= maxRetries && !skipToNext) {
+      const result = await solveQuestion(page, i, reportGenerator);
+      
+      // Check if question failed due to errors (not just wrong answer)
+      if (result.errorMessage && retryCount < maxRetries) {
+        retryCount++;
+        console.log(`❌ Q${i} failed with error: ${result.errorMessage.substring(0, 100)}`);
+        console.log(`Retrying Q${i} (attempt ${retryCount}/${maxRetries})...`);
+        
+        // Remove the failed result from report
+        reportGenerator.results.pop();
+        
+        await page.waitForTimeout(500); // Wait before retry
+        // Try to re-navigate to the question
+        await navigateToQuestion(page, i);
+      } else {
+        skipToNext = true;
+        
+        // If max retries reached and still failed, mark as SKIPPED
+        if (result.errorMessage && retryCount === maxRetries) {
+          console.log(`❌ Q${i} failed after ${maxRetries} retries, marking as SKIPPED`);
+          reportGenerator.results.pop(); // Remove the last failed result
+          const skipResult = {
+            questionNumber: `Q${i}`,
+            questionText: result.questionText || `Question ${i}`,
+            code: 'Retry exhausted',
+            status: 'SKIPPED' as const,
+            timestamp: new Date().toISOString(),
+            errorMessage: `Failed after ${maxRetries} retries due to: ${result.errorMessage}`
+          } as QuestionResult;
+          reportGenerator.addResult(skipResult);
+        }
+      }
+    }
     
     // Check if there's a next question before trying to navigate
     if (i < totalQuestions) {
@@ -572,10 +611,10 @@ test('Solve all coding questions', async ({ page, context }) => {
       
       for (const selector of nextButtonSelectors) {
         try {
-          const button = selector.startsWith('/') 
-            ? page.locator(`xpath=${selector}`)
-            : page.locator(selector);
-          nextVisible = await button.isVisible({ timeout: 3000 }).catch(() => false);
+      const button = selector.startsWith('/') 
+        ? page.locator(`xpath=${selector}`)
+        : page.locator(selector);
+      nextVisible = await button.isVisible({ timeout: 1000 }).catch(() => false);
           if (nextVisible) {
             nextButton = button;
             console.log(`Found NEXT button with selector: ${selector}`);
@@ -590,7 +629,7 @@ test('Solve all coding questions', async ({ page, context }) => {
         try {
           await nextButton.click();
           console.log(`Moving to Q${i + 1}...`);
-          await page.waitForTimeout(2000); // Wait for page to load
+          await page.waitForTimeout(500); // Wait for page to load
         } catch (e) {
           console.log(`Failed to click NEXT button: ${e.message}`);
           // Don't break here, try direct navigation instead
@@ -614,6 +653,32 @@ test('Solve all coding questions', async ({ page, context }) => {
     }
   }
 
+  console.log('\n=== Running Gemini Analysis ===');
+  const geminiAnalyzer = new GeminiAnalyzer();
+  
+  // Perform Gemini analysis on all results
+  for (const result of reportGenerator.results) {
+    if (result.questionText && result.code && result.code !== 'Code not captured') {
+      try {
+        console.log(`Analyzing ${result.questionNumber}...`);
+        const analysisPromise = geminiAnalyzer.analyzeQuestionAndCode(result.questionText, result.code);
+        const timeoutPromise = new Promise((_, reject) => 
+          setTimeout(() => reject(new Error('Timeout')), 30000)
+        );
+        const analysis = await Promise.race([analysisPromise, timeoutPromise]) as any;
+        result.geminiRemarks = analysis.remarks;
+        console.log(`✅ ${result.questionNumber}: ${analysis.remarks.substring(0, 50)}...`);
+      } catch (error) {
+        console.error(`❌ Gemini analysis failed for ${result.questionNumber}`);
+        result.geminiRemarks = 'Analysis timeout or failed';
+      }
+    } else {
+      result.geminiRemarks = 'Skipped - insufficient data';
+    }
+  }
+  
+  // Regenerate report with Gemini remarks
+  console.log('\n=== Generating Final Report with Gemini Remarks ===');
   const reportPath = reportGenerator.generateExcelReport();
   const summary = reportGenerator.getSummary();
 

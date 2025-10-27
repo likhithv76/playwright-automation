@@ -8,7 +8,7 @@ export default defineConfig({
   retries: process.env.CI ? 2 : 0,
   workers: process.env.CI ? 1 : undefined,
   reporter: 'html',
-  timeout: 15 * 60 * 1000, 
+  timeout: 20 * 60 * 1000,
   headless: false,
   baseURL: process.env.BASE_URL,
   trace: 'on-first-retry',
@@ -87,4 +87,5 @@ export default defineConfig({
         },
       },
     }
+  ],
 });
