@@ -10,6 +10,7 @@ dotenv.config();
 const BASE_URL = process.env.BASE_URL || 'https://lms.exskilence.com';
 const TARGET_PATH = process.env.TARGET_PATH || '/testing/coding/cs';
 const START_FROM_QUESTION = parseInt(process.env.START_FROM || '1');
+const END_TO_QUESTION = process.env.END_TO ? parseInt(process.env.END_TO) : undefined;
 const AUTH_DIR = path.join(__dirname, '..', 'playwright', '.auth');
 const STORAGE_PATH = path.join(AUTH_DIR, 'user.json');
 
@@ -595,6 +596,8 @@ async function solveQuestion(page, questionNumber, reportGenerator) {
 test('Solve all coding questions', async ({ page, context }) => {
   const reportGenerator = new ReportGenerator();
   const geminiAnalyzer = new GeminiAnalyzer();
+  const runTimestamp = new Date().toISOString().replace(/[:.]/g, '-').slice(0, 19);
+  const runReportName = `report-${runTimestamp}.xlsx`;
   
   let reportGenerated = false;
   
@@ -602,7 +605,7 @@ test('Solve all coding questions', async ({ page, context }) => {
     if (!reportGenerated && reportGenerator.results.length > 0) {
       console.log('\n\n=== Test Interrupted - Generating Partial Report ===');
       try {
-        const reportPath = reportGenerator.generateExcelReport();
+        const reportPath = reportGenerator.generateExcelReport(runReportName);
         const summary = reportGenerator.getSummary();
 
         console.log('\n=== PARTIAL SUMMARY ===');
@@ -654,6 +657,9 @@ test('Solve all coding questions', async ({ page, context }) => {
   try { 
   const totalQuestions = await detectTotalQuestions(page);
   console.log(`Total questions detected: ${totalQuestions}`);
+  
+  const effectiveEndTo = END_TO_QUESTION ? Math.min(END_TO_QUESTION, totalQuestions) : totalQuestions;
+  console.log(`\n=== Processing range: Q${START_FROM_QUESTION} to Q${effectiveEndTo} ===`);
 
     console.log(`\n=== Resuming from Q${START_FROM_QUESTION} ===`);
     const navigationSuccess = await navigateToQuestion(page, START_FROM_QUESTION);
@@ -663,7 +669,7 @@ test('Solve all coding questions', async ({ page, context }) => {
   }
     console.log(`Starting with Q${START_FROM_QUESTION}...`);
 
-    for (let i = START_FROM_QUESTION; i <= totalQuestions; i++) {
+    for (let i = START_FROM_QUESTION; i <= effectiveEndTo; i++) {
     console.log(`\n=== Processing Q${i} ===`);
     
       if (i > START_FROM_QUESTION) {
@@ -690,6 +696,7 @@ test('Solve all coding questions', async ({ page, context }) => {
           
           result.geminiStatus = 'SKIPPED';
           result.geminiRemarks = 'Skipped - navigation failed';
+          try { reportGenerator.generateExcelReport(runReportName); } catch (e) { console.error('Incremental report save failed:', (e as any).message); }
         continue;
       }
     }
@@ -790,8 +797,9 @@ test('Solve all coding questions', async ({ page, context }) => {
           currentResult.geminiRemarks = 'Skipped - insufficient data';
         }
       }
+      try { reportGenerator.generateExcelReport(runReportName); } catch (e) { console.error('Incremental report save failed:', (e as any).message); }
     
-    if (i < totalQuestions) {
+    if (i < effectiveEndTo) {
       const nextQuestionExists = await verifyNextQuestionExists(page, i);
       
       if (!nextQuestionExists) {
@@ -855,7 +863,7 @@ test('Solve all coding questions', async ({ page, context }) => {
   }
 
     console.log('\n=== Generating Final Report with Gemini Remarks ===');
-    const reportPath = reportGenerator.generateExcelReport();
+    const reportPath = reportGenerator.generateExcelReport(runReportName);
     const summary = reportGenerator.getSummary();
     reportGenerated = true;
 
@@ -872,7 +880,7 @@ test('Solve all coding questions', async ({ page, context }) => {
     // Generate partial report if we have any results
     if (reportGenerator.results.length > 0) {
       console.log('\n=== Generating Partial Report with Available Data ===');
-      const reportPath = reportGenerator.generateExcelReport();
+      const reportPath = reportGenerator.generateExcelReport(runReportName);
       const summary = reportGenerator.getSummary();
       reportGenerated = true;
 
@@ -894,7 +902,7 @@ test('Solve all coding questions', async ({ page, context }) => {
     if (!reportGenerated && reportGenerator.results.length > 0) {
       console.log('\n=== Generating Report on Exit ===');
       try {
-  const reportPath = reportGenerator.generateExcelReport();
+  const reportPath = reportGenerator.generateExcelReport(runReportName);
   const summary = reportGenerator.getSummary();
 
         console.log('\n=== FINAL SUMMARY ===');
