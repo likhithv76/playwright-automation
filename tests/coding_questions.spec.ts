@@ -765,8 +765,9 @@ test('Solve all coding questions', async ({ page, context }) => {
                   currentResult.code
                 );
             
+            // Increased timeout to 60s for large code analysis
             const timeoutPromise = new Promise((_, reject) => 
-              setTimeout(() => reject(new Error('Timeout')), 30000)
+              setTimeout(() => reject(new Error('Gemini analysis timeout after 60s')), 60000)
             );
             const analysis = await Promise.race([analysisPromise, timeoutPromise]) as any;
             currentResult.geminiStatus = analysis.status;

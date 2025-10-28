@@ -110,8 +110,14 @@ Reply strictly in JSON format:
 `;
 
 
-          const result = await model.generateContent(prompt);
-          const response = result.response;
+          // Add explicit timeout wrapper
+          const apiCall = model.generateContent(prompt);
+          const timeout = new Promise((_, reject) => 
+            setTimeout(() => reject(new Error('Gemini API call timeout after 45s')), 45000)
+          );
+          
+          const result = await Promise.race([apiCall, timeout]);
+          const response = (result as any).response;
           const rawText = response.text().trim();
           
           let status = 'NEEDS_REVIEW';
