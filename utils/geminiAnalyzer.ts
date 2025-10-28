@@ -7,6 +7,7 @@ export interface GeminiAnalysis {
   status: string;
   remarks: string;
   isValid: boolean;
+  updatedRequirements?: string[];
 }
 
 export class GeminiAnalyzer {
@@ -116,12 +117,16 @@ Reply strictly in JSON format:
           let status = 'NEEDS_REVIEW';
           let remarks = rawText;
           
+          let updatedRequirements: string[] | undefined = undefined;
           try {
             const jsonMatch = rawText.match(/\{[\s\S]*\}/);
             if (jsonMatch) {
               const parsed = JSON.parse(jsonMatch[0]);
               status = parsed.status || status;
               remarks = parsed.remarks || remarks;
+              if (parsed.updated_requirements && Array.isArray(parsed.updated_requirements)) {
+                updatedRequirements = parsed.updated_requirements;
+              }
             } else {
               const lowerText = rawText.toLowerCase();
               if (lowerText.includes('match confirmed') || lowerText.includes('matches well') || lowerText.includes('correct')) {
@@ -153,7 +158,8 @@ Reply strictly in JSON format:
           return {
             status,
             remarks: remarks,
-            isValid
+            isValid,
+            updatedRequirements: status === 'MATCH' ? undefined : updatedRequirements
           };
 
         } catch (error) {

@@ -764,6 +764,9 @@ test('Solve all coding questions', async ({ page, context }) => {
             const analysis = await Promise.race([analysisPromise, timeoutPromise]) as any;
             currentResult.geminiStatus = analysis.status;
             currentResult.geminiRemarks = analysis.remarks;
+            if (analysis.status && analysis.status !== 'MATCH' && Array.isArray(analysis.updatedRequirements)) {
+              currentResult.geminiUpdatedRequirements = analysis.updatedRequirements;
+            }
             console.log(`${currentResult.questionNumber}: ${analysis.status} - ${analysis.remarks}`);
             
             if (i % 15 === 0 && i < totalQuestions) {
