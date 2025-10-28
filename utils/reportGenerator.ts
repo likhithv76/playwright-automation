@@ -10,13 +10,14 @@ export interface CodeFile {
 export interface QuestionResult {
   questionNumber: string;
   questionText: string;
-  code: string; // Will contain formatted code from all files
-  codeFiles?: CodeFile[]; // Detailed breakdown by file
+  code: string;
+  codeFiles?: CodeFile[];
   status: 'PASSED' | 'FAILED' | 'SKIPPED';
   errorMessage?: string;
   timestamp: string;
-  geminiStatus?: string;  // Short keyword: MATCH, DOESNT_MATCH, PARTIAL, etc.
-  geminiRemarks?: string; // Full detailed remarks
+  geminiStatus?: string;        
+  geminiRemarks?: string;  
+  geminiUpdatedRequirements?: string[] | string;
 }
 
 export class ReportGenerator {
@@ -27,17 +28,21 @@ export class ReportGenerator {
   }
 
   generateExcelReport(customFilename?: string) {
-    // Create workbook
     const workbook = XLSX.utils.book_new();
 
-    // Prepare data for Excel
     const excelData = this.results.map(result => {
-      // Add file indicator to code column if multiple files exist
       let codeValue = result.code;
       if (result.codeFiles && result.codeFiles.length > 1) {
         codeValue = `[${result.codeFiles.length} files] ${codeValue}`;
       }
-      
+
+      let updatedRequirements = '';
+      if (Array.isArray(result.geminiUpdatedRequirements)) {
+        updatedRequirements = result.geminiUpdatedRequirements.join('\n• ');
+      } else if (typeof result.geminiUpdatedRequirements === 'string') {
+        updatedRequirements = result.geminiUpdatedRequirements;
+      }
+
       return {
         'Question Number': result.questionNumber,
         'Question Text': result.questionText,
@@ -46,43 +51,39 @@ export class ReportGenerator {
         'Error Message': result.errorMessage || '',
         'Timestamp': result.timestamp,
         'Gemini Status': result.geminiStatus || '',
-        'Gemini Remarks': result.geminiRemarks || ''
+        'Gemini Remarks': result.geminiRemarks || '',
+        'Gemini Updated Requirements': updatedRequirements || ''
       };
     });
-
-    // Create worksheet
+    
     const worksheet = XLSX.utils.json_to_sheet(excelData);
 
-    // Set column widths
     const columnWidths = [
-      { wch: 15 }, // Question Number
-      { wch: 50 }, // Question Text
-      { wch: 80 }, // Code
-      { wch: 12 }, // Status
-      { wch: 30 }, // Error Message
-      { wch: 20 }, // Timestamp
-      { wch: 15 }, // Gemini Status
-      { wch: 150 }  // Gemini Remarks (increased for full text)
+      { wch: 15 },
+      { wch: 50 },
+      { wch: 80 },
+      { wch: 12 },
+      { wch: 30 },
+      { wch: 20 },
+      { wch: 15 },
+      { wch: 80 },
+      { wch: 100 }
     ];
     worksheet['!cols'] = columnWidths;
 
-    // Add worksheet to workbook
     XLSX.utils.book_append_sheet(workbook, worksheet, 'Coding Questions Report');
 
-    // Create reports directory if it doesn't exist
     const reportsDir = path.join(process.cwd(), 'reports');
     if (!fs.existsSync(reportsDir)) {
       fs.mkdirSync(reportsDir, { recursive: true });
     }
 
-    // Generate filename with timestamp if not provided
     let filename = customFilename;
     if (!filename) {
       const timestamp = new Date().toISOString().replace(/[:.]/g, '-').slice(0, 19);
       filename = `report-${timestamp}.xlsx`;
     }
 
-    // Write file
     const filePath = path.join(reportsDir, filename);
     XLSX.writeFile(workbook, filePath);
 

@@ -70,14 +70,44 @@ export class GeminiAnalyzer {
             codeContent = `\`\`\`\n${code}\n\`\`\``;
           }
 
-          const prompt = `Does the code solve the question correctly?
+          const prompt = `
+You are an expert HTML/CSS/JS evaluator. Your goal is to:
+1. Verify whether the student's code exactly satisfies the question requirements.
+2. If not, generate an updated version of the requirements that matches what the student actually implemented — useful for student feedback.
 
-Question: ${questionText}
+Be precise, strict, and brief.
 
-Code: ${codeContent}
+---
 
-Reply with JSON:
-{"status": "MATCH" or "DOESNT_MATCH" or "PARTIAL", "remarks": "short explanation in simple words"}`;
+QUESTION DETAILS:
+${questionText}
+
+---
+
+CODE SUBMISSION:
+${codeContent}
+
+---
+
+Evaluation Rules:
+1. Mark as "MATCH" only if the code fully satisfies every requirement (HTML elements, structure, attributes, CSS property names and values, layout logic, and text content).
+2. Mark as "PARTIAL" if minor requirements are missing, incomplete, or incorrect.
+3. Mark as "DOESNT_MATCH" if most or key requirements are missing or incorrect.
+4. "remarks" must be a short factual summary (under 25 words).
+5. If status ≠ "MATCH", create "updated_requirements" that describe what the student's code *actually* does — in clear instructional form, ordered as per the code.
+   Example: If the student used a <div> with a specific class and style, describe that in simple teacher-friendly language.
+6. Never explain your reasoning, and do not include text outside the JSON object.
+
+---
+
+Reply strictly in JSON format:
+{
+  "status": "MATCH" | "PARTIAL" | "DOESNT_MATCH",
+  "remarks": "short factual explanation",
+  "updated_requirements": ["list of 1–5 requirements describing the student's code, or empty array if MATCH"]
+}
+`;
+
 
           const result = await model.generateContent(prompt);
           const response = result.response;
