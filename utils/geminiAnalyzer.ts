@@ -4,20 +4,20 @@ import * as dotenv from 'dotenv';
 dotenv.config();
 
 export interface GeminiAnalysis {
-  status: string;  // Short keyword like "Match confirmed", "Doesn't match", etc.
-  remarks: string;  // Full detailed text
+  status: string;
+  remarks: string;
   isValid: boolean;
 }
 
 export class GeminiAnalyzer {
   private genAI: GoogleGenerativeAI | null = null;
   private maxRetries = 3;
-  private retryDelay = 2000; // 2 seconds initial delay
+  private retryDelay = 2000;
 
   constructor() {
     const apiKey = process.env.GEMINI_API_KEY;
     
-    if (!apiKey || apiKey === 'your_api_key_here') {
+    if (!apiKey) {
       console.warn('GEMINI_API_KEY not found in .env file. Gemini analysis will be skipped.');
       this.genAI = null;
     } else {
@@ -53,7 +53,6 @@ export class GeminiAnalyzer {
       };
     }
 
-    // Try multiple models in order of preference
     const models = ['gemini-2.5-flash'];
     let lastError: any = null;
 
@@ -62,23 +61,20 @@ export class GeminiAnalyzer {
         try {
           const model = this.genAI.getGenerativeModel({ model: modelName });
 
-          // Build code content for analysis
           let codeContent = '';
           if (codeFiles && codeFiles.length > 0) {
-            // If multiple files exist, format them nicely
             codeContent = codeFiles.map(file => 
               `FILE: ${file.fileName}\n\`\`\`\n${file.code}\n\`\`\``
             ).join('\n\n');
           } else {
-            // Single code block
             codeContent = `\`\`\`\n${code}\n\`\`\``;
           }
 
           const prompt = `Does the code solve the question correctly?
 
-Question: ${questionText.substring(0, 200)}
+Question: ${questionText}
 
-Code: ${codeContent.substring(0, 500)}
+Code: ${codeContent}
 
 Reply with JSON:
 {"status": "MATCH" or "DOESNT_MATCH" or "PARTIAL", "remarks": "short explanation in simple words"}`;
@@ -87,19 +83,16 @@ Reply with JSON:
           const response = result.response;
           const rawText = response.text().trim();
           
-          // Try to extract JSON from the response
           let status = 'NEEDS_REVIEW';
           let remarks = rawText;
           
           try {
-            // Look for JSON in the response
             const jsonMatch = rawText.match(/\{[\s\S]*\}/);
             if (jsonMatch) {
               const parsed = JSON.parse(jsonMatch[0]);
               status = parsed.status || status;
               remarks = parsed.remarks || remarks;
             } else {
-              // Fallback: try to infer status from text
               const lowerText = rawText.toLowerCase();
               if (lowerText.includes('match confirmed') || lowerText.includes('matches well') || lowerText.includes('correct')) {
                 status = 'MATCH';
@@ -108,11 +101,9 @@ Reply with JSON:
               } else if (lowerText.includes('partial') || lowerText.includes('mostly')) {
                 status = 'PARTIAL';
               }
-              // Don't truncate remarks
               remarks = rawText;
             }
           } catch (e) {
-            // If parsing fails, use fallback logic
             const lowerText = rawText.toLowerCase();
             if (lowerText.includes('match confirmed') || lowerText.includes('matches well')) {
               status = 'MATCH';
@@ -121,7 +112,6 @@ Reply with JSON:
             } else if (lowerText.includes('partial')) {
               status = 'PARTIAL';
             }
-            // Don't truncate remarks
             remarks = rawText;
           }
 
@@ -132,33 +122,30 @@ Reply with JSON:
           
           return {
             status,
-            remarks: remarks, // No truncation
+            remarks: remarks,
             isValid
           };
 
         } catch (error) {
           lastError = error;
           
-          // Check if we should retry
           if (this.shouldRetry(error) && attempt < this.maxRetries) {
-            const delay = this.retryDelay * Math.pow(2, attempt - 1); // Exponential backoff
-            console.log(`⚠️  Gemini API error (attempt ${attempt}/${this.maxRetries}): ${error.message}`);
-            console.log(`   Retrying in ${delay/1000}s with ${modelName}...`);
+            const delay = this.retryDelay * Math.pow(2, attempt - 1);
+            console.log(`Gemini API error (attempt ${attempt}/${this.maxRetries}): ${error.message}`);
+            console.log(`Retrying in ${delay/1000}s with ${modelName}...`);
             await this.sleep(delay);
             continue;
           }
-          
-          // If not retriable or last attempt, try next model
+
           if (attempt >= this.maxRetries && models.indexOf(modelName) < models.length - 1) {
-            console.log(`✗ All retries failed for ${modelName}, trying next model...`);
+            console.log(`All retries failed for ${modelName}, trying next model...`);
             break;
           }
         }
       }
     }
 
-    // All models failed
-    console.error('✗ All Gemini models failed after retries');
+    console.error('All Gemini models failed after retries');
     return {
       status: 'ERROR',
       remarks: `Analysis failed: ${lastError ? lastError.message : 'Unknown error'}. Service may be overloaded.`,
