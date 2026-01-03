@@ -632,7 +632,18 @@ async function solveQuestion(page, questionNumber, reportGenerator) {
         // Wait for result element to appear (up to 15 seconds)
         await page.waitForSelector(`xpath=${resultXPath}`, { timeout: 15000, state: 'visible' });
         const resultElement = page.locator(`xpath=${resultXPath}`);
-        const resultText = await resultElement.textContent();
+        
+        // Wait for "Processing..." to complete and change to actual result
+        let resultText = await resultElement.textContent();
+        let attempts = 0;
+        const maxAttempts = 15; // Wait up to 15 seconds (1 second intervals)
+        
+        while (attempts < maxAttempts && resultText && resultText.trim().toLowerCase().includes('processing')) {
+          console.log(`[Runner ${RUNNER_ID}] Still processing... waiting for result (attempt ${attempts + 1}/${maxAttempts})`);
+          await page.waitForTimeout(1000);
+          resultText = await resultElement.textContent();
+          attempts++;
+        }
         
         if (resultText) {
           const trimmedText = resultText.trim();
@@ -647,6 +658,8 @@ async function solveQuestion(page, questionNumber, reportGenerator) {
             result.status = 'FAILED';
             console.log(`✗ Failed Q${questionNumber} - Result: "${trimmedText}"`);
             resultFound = true;
+          } else if (lowerText.includes('processing')) {
+            console.log(`⚠ Still processing for Q${questionNumber} after ${maxAttempts} seconds`);
           } else {
             console.log(`? Unknown result for Q${questionNumber}: "${trimmedText}"`);
           }
