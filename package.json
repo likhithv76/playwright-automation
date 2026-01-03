@@ -3,7 +3,12 @@
   "version": "1.0.0",
   "description": "",
   "main": "index.js",
-  "scripts": {},
+  "scripts": {
+    "start:headed":"node scripts/run-parallel.js start:headed",
+    "start:headed-no-ai":"node scripts/run-parallel.js start:headed-no-ai",
+    "start:headless":"node scripts/run-parallel.js start:headless",
+    "start:headless-no-ai":"node scripts/run-parallel.js start:headless-no-ai"
+  },
   "keywords": [],
   "author": "",
   "license": "ISC",

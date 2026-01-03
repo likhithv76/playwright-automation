@@ -72,11 +72,29 @@ export class GeminiAnalyzer {
           }
 
           const prompt = `
-You are an expert HTML/CSS/JS evaluator. Your goal is to:
-1. Verify whether the student's code exactly satisfies the question requirements.
-2. If not, generate an updated version of the requirements that matches what the student actually implemented — useful for student feedback.
+You are an expert HTML/CSS/JS code analyzer. Your goal is to extract ALL requirements that are present in the code and describe them in a clear, student-friendly way.
 
-Be precise, strict, and brief.
+Analyze the code thoroughly and identify:
+1. All HTML elements, their structure, attributes, classes, and IDs
+2. All CSS properties, values, selectors, and styling rules
+3. All JavaScript functionality, event handlers, and logic
+4. All text content, labels, and user-facing elements
+5. All layout structures, positioning, and responsive features
+6. All interactive features and behaviors
+
+Requirements:
+- Extract EVERY requirement present in the code - do not miss anything
+- Describe each requirement in simple, student-friendly language
+- Use clear instructional language as if explaining to a student
+- Order requirements logically (top to bottom, or by functionality)
+- Be specific about elements, classes, properties, and values
+- Include all details: attributes, styles, text content, behaviors
+- For CSS values, use the EXACT values from the code (e.g., #eebbcc, not "pink"; 20px, not "twenty pixels"; rgba(255,0,0,0.5), not "semi-transparent red")
+
+Example format:
+- "Create a header element with the class 'main-header' and text 'Welcome'"
+- "Style the header with background color #eebbcc and text color #ffffff"
+- "Add a button with id 'submit-btn' that triggers an alert on click"
 
 ---
 
@@ -90,22 +108,9 @@ ${codeContent}
 
 ---
 
-Evaluation Rules:
-1. Mark as "MATCH" only if the code fully satisfies every requirement (HTML elements, structure, attributes, CSS property names and values, layout logic, and text content).
-2. Mark as "PARTIAL" if minor requirements are missing, incomplete, or incorrect.
-3. Mark as "DOESNT_MATCH" if most or key requirements are missing or incorrect.
-4. "remarks" must be a short factual summary (under 25 words).
-5. If status ≠ "MATCH", create "updated_requirements" that describe what the student's code *actually* does — in clear instructional form, ordered as per the code.
-   Example: If the student used a <div> with a specific class and style, describe that in simple teacher-friendly language.
-6. Never explain your reasoning, and do not include text outside the JSON object.
-
----
-
 Reply strictly in JSON format:
 {
-  "status": "MATCH" | "PARTIAL" | "DOESNT_MATCH",
-  "remarks": "short factual explanation",
-  "updated_requirements": ["list of 1–5 requirements describing the student's code, or empty array if MATCH"]
+  "updated_requirements": ["list of ALL requirements describing what the student's code actually does, in student-friendly language - must include EVERY requirement present in the code"]
 }
 `;
 
@@ -120,52 +125,40 @@ Reply strictly in JSON format:
           const response = (result as any).response;
           const rawText = response.text().trim();
           
-          let status = 'NEEDS_REVIEW';
-          let remarks = rawText;
-          
           let updatedRequirements: string[] | undefined = undefined;
           try {
             const jsonMatch = rawText.match(/\{[\s\S]*\}/);
             if (jsonMatch) {
               const parsed = JSON.parse(jsonMatch[0]);
-              status = parsed.status || status;
-              remarks = parsed.remarks || remarks;
               if (parsed.updated_requirements && Array.isArray(parsed.updated_requirements)) {
                 updatedRequirements = parsed.updated_requirements;
               }
-            } else {
-              const lowerText = rawText.toLowerCase();
-              if (lowerText.includes('match confirmed') || lowerText.includes('matches well') || lowerText.includes('correct')) {
-                status = 'MATCH';
-              } else if (lowerText.includes("doesn't match") || lowerText.includes('wrong') || lowerText.includes('incorrect')) {
-                status = 'DOESNT_MATCH';
-              } else if (lowerText.includes('partial') || lowerText.includes('mostly')) {
-                status = 'PARTIAL';
-              }
-              remarks = rawText;
             }
           } catch (e) {
-            const lowerText = rawText.toLowerCase();
-            if (lowerText.includes('match confirmed') || lowerText.includes('matches well')) {
-              status = 'MATCH';
-            } else if (lowerText.includes("doesn't match") || lowerText.includes('wrong')) {
-              status = 'DOESNT_MATCH';
-            } else if (lowerText.includes('partial')) {
-              status = 'PARTIAL';
+            // If JSON parsing fails, try to extract requirements from text
+            const lines = rawText.split('\n');
+            updatedRequirements = [];
+            for (const line of lines) {
+              const trimmed = line.trim();
+              if (trimmed && !trimmed.startsWith('{') && !trimmed.startsWith('}')) {
+                const cleaned = trimmed.replace(/^[-*]\s*/, '').replace(/^\d+\.\s*/, '');
+                if (cleaned.length > 10) {
+                  updatedRequirements.push(cleaned);
+                }
+              }
             }
-            remarks = rawText;
           }
 
-          const isValid = !remarks.toLowerCase().includes('skip') && 
-                          !remarks.toLowerCase().includes('not configured');
+          const isValid = updatedRequirements !== undefined && 
+                          updatedRequirements.length > 0;
 
           console.log(`✓ Gemini analysis successful using ${modelName} (attempt ${attempt})`);
           
           return {
-            status,
-            remarks: remarks,
+            status: 'SUCCESS',
+            remarks: `Extracted ${updatedRequirements?.length || 0} requirements`,
             isValid,
-            updatedRequirements: status === 'MATCH' ? undefined : updatedRequirements
+            updatedRequirements
           };
 
         } catch (error) {

@@ -105,4 +105,63 @@ export class ReportGenerator {
       successRate: total > 0 ? ((passed / total) * 100).toFixed(2) : '0.00'
     };
   }
+
+  static mergeReports(reportFiles: string[], outputFilename: string): string {
+    const reportsDir = path.join(process.cwd(), 'reports');
+    const mergedWorkbook = XLSX.utils.book_new();
+    const allData: any[] = [];
+
+    // Read all report files
+    for (const reportFile of reportFiles) {
+      const filePath = path.join(reportsDir, reportFile);
+      if (fs.existsSync(filePath)) {
+        try {
+          const workbook = XLSX.readFile(filePath);
+          const sheetName = workbook.SheetNames[0];
+          const worksheet = workbook.Sheets[sheetName];
+          const data = XLSX.utils.sheet_to_json(worksheet);
+          allData.push(...data);
+          console.log(`Merged ${data.length} rows from ${reportFile}`);
+        } catch (error) {
+          console.error(`Error reading ${reportFile}:`, error);
+        }
+      } else {
+        console.warn(`Report file not found: ${filePath}`);
+      }
+    }
+
+    // Sort by question number
+    allData.sort((a, b) => {
+      const aNum = parseInt(a['Question Number']?.replace('Q', '') || '0');
+      const bNum = parseInt(b['Question Number']?.replace('Q', '') || '0');
+      return aNum - bNum;
+    });
+
+    // Create merged worksheet
+    const worksheet = XLSX.utils.json_to_sheet(allData);
+    
+    const columnWidths = [
+      { wch: 15 },
+      { wch: 50 },
+      { wch: 80 },
+      { wch: 12 },
+      { wch: 30 },
+      { wch: 20 },
+      { wch: 15 },
+      { wch: 80 },
+      { wch: 100 }
+    ];
+    worksheet['!cols'] = columnWidths;
+
+    XLSX.utils.book_append_sheet(mergedWorkbook, worksheet, 'Coding Questions Report');
+
+    const outputPath = path.join(reportsDir, outputFilename);
+    XLSX.writeFile(mergedWorkbook, outputPath);
+
+    console.log(`\n=== Merged Report Generated ===`);
+    console.log(`Total rows: ${allData.length}`);
+    console.log(`Output: ${outputPath}`);
+    
+    return outputPath;
+  }
 }

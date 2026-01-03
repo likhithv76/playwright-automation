@@ -7,10 +7,16 @@ import * as dotenv from 'dotenv';
 
 dotenv.config();
 
-const BASE_URL = process.env.BASE_URL || 'https://lms.exskilence.com';
-const TARGET_PATH = process.env.TARGET_PATH || '/testing/coding/cs';
+// Load selectors config
+const CONFIG_PATH = path.join(__dirname, '..', 'configs', 'version2.json');
+const selectorsConfig = JSON.parse(fs.readFileSync(CONFIG_PATH, 'utf-8')).selectors_types;
+
+const BASE_URL = process.env.BASE_URL || '';
+const TARGET_PATH = process.env.TARGET_PATH || '';
 const START_FROM_QUESTION = parseInt(process.env.START_FROM || '1');
 const END_TO_QUESTION = process.env.END_TO ? parseInt(process.env.END_TO) : undefined;
+const RUNNERS = parseInt(process.env.RUNNERS || '1');
+const RUNNER_ID = parseInt(process.env.RUNNER_ID || '1');
 const AUTH_DIR = path.join(__dirname, '..', 'playwright', '.auth');
 const STORAGE_PATH = path.join(AUTH_DIR, 'user.json');
 
@@ -28,8 +34,43 @@ const test = base.extend({
 
 export { test, expect };
 
+async function waitForSessionFile(maxWait = 300000, checkInterval = 2000) {
+  const start = Date.now();
+  console.log(`[Runner ${RUNNER_ID}] Waiting for session file to be created by another runner...`);
+  
+  while (Date.now() - start < maxWait) {
+    if (fs.existsSync(STORAGE_PATH)) {
+      console.log(`[Runner ${RUNNER_ID}] Session file found!`);
+      return true;
+    }
+    await new Promise(resolve => setTimeout(resolve, checkInterval));
+  }
+  
+  console.log(`[Runner ${RUNNER_ID}] Timeout waiting for session file`);
+  return false;
+}
+
 async function loginToApp(page, context) {
-  console.log('Starting Google OAuth login flow...');
+  // If session already exists, use it
+  if (fs.existsSync(STORAGE_PATH)) {
+    console.log(`[Runner ${RUNNER_ID}] Session file already exists, using saved session`);
+    return;
+  }
+
+  // If multiple runners, only runner 1 should do manual login
+  // Other runners wait for runner 1 to create the session file
+  if (RUNNERS > 1 && RUNNER_ID > 1) {
+    console.log(`[Runner ${RUNNER_ID}] Waiting for Runner 1 to complete login...`);
+    const sessionReady = await waitForSessionFile();
+    if (sessionReady) {
+      console.log(`[Runner ${RUNNER_ID}] Session ready, proceeding...`);
+      return;
+    } else {
+      console.log(`[Runner ${RUNNER_ID}] Session not ready, attempting own login...`);
+    }
+  }
+
+  console.log(`[Runner ${RUNNER_ID}] Starting Google OAuth login flow...`);
   await page.goto(BASE_URL, { waitUntil: 'networkidle' });
 
   const dashboardVisible = await page
@@ -37,11 +78,20 @@ async function loginToApp(page, context) {
     .isVisible()
     .catch(() => false);
   if (dashboardVisible) {
-    console.log('Already logged in.');
+    console.log(`[Runner ${RUNNER_ID}] Already logged in.`);
+    if (!fs.existsSync(AUTH_DIR)) fs.mkdirSync(AUTH_DIR, { recursive: true });
+    await context.storageState({ path: STORAGE_PATH });
+    console.log(`[Runner ${RUNNER_ID}] Session saved to: ${STORAGE_PATH}`);
     return;
   }
 
-  console.log('Please manually complete Google login...');
+  // Only show manual login prompt for runner 1 (or single runner)
+  if (RUNNERS > 1 && RUNNER_ID === 1) {
+    console.log(`[Runner ${RUNNER_ID}] Please manually complete Google login (other runners are waiting)...`);
+  } else {
+    console.log(`[Runner ${RUNNER_ID}] Please manually complete Google login...`);
+  }
+
   const start = Date.now();
   const maxWait = 180000;
 
@@ -51,7 +101,7 @@ async function loginToApp(page, context) {
       currentUrl.includes('/Dashboard') ||
       currentUrl.includes('/dashboard')
     ) {
-      console.log('Dashboard detected, login successful.');
+      console.log(`[Runner ${RUNNER_ID}] Dashboard detected, login successful.`);
       break;
     }
     await page.waitForTimeout(2000);
@@ -59,7 +109,12 @@ async function loginToApp(page, context) {
 
   if (!fs.existsSync(AUTH_DIR)) fs.mkdirSync(AUTH_DIR, { recursive: true });
   await context.storageState({ path: STORAGE_PATH });
-  console.log('Session saved to:', STORAGE_PATH);
+  console.log(`[Runner ${RUNNER_ID}] Session saved to: ${STORAGE_PATH}`);
+  
+  // If multiple runners, notify others that session is ready
+  if (RUNNERS > 1 && RUNNER_ID === 1) {
+    console.log(`[Runner ${RUNNER_ID}] Session saved! Other runners can now proceed.`);
+  }
 }
 
 async function navigateToCodingQuestions(page) {
@@ -322,9 +377,9 @@ async function solveQuestion(page, questionNumber, reportGenerator) {
 
   try {
     await page.waitForTimeout(500);
-
+// Extract question text
     try {
-      const questionElement = page.locator('xpath=/html/body/div/div/div[3]/div[2]/div/div/div/div/div/div/div/div[2]/div/div[1]/div');
+      const questionElement = page.locator(`xpath=${selectorsConfig.question_text.xpath}`);
       await questionElement.waitFor({ timeout: 2000 });
       result.questionText = (await questionElement.textContent()) || `Question ${questionNumber}`;
       console.log(`Extracted question text for Q${questionNumber}: ${result.questionText.substring(0, 100)}...`);
@@ -363,7 +418,7 @@ async function solveQuestion(page, questionNumber, reportGenerator) {
     }
 
     try {
-      const fileButtonsContainer = page.locator('xpath=/html/body/div/div/div[3]/div[2]/div/div/div/div/div/div/div/div[3]/div[1]/div[1]/div/div');
+      const fileButtonsContainer = page.locator(`xpath=${selectorsConfig.file_buttons_container.xpath}`);
       
       let hasMultipleFiles = false;
       try {
@@ -391,15 +446,16 @@ async function solveQuestion(page, questionNumber, reportGenerator) {
               await page.waitForTimeout(1000);
               
               let fileCode = '';
-              
+              // Extract code from the file
               try {
-                const codeElement = page.locator('xpath=/html/body/div/div/div[3]/div[2]/div/div/div/div/div/div/div/div[3]/div[1]/div[2]/div/div/div[2]/div[2]');
+                const codeElement = page.locator(`xpath=${selectorsConfig.code_multiple_files.xpath}`);
                 fileCode = (await codeElement.inputValue({ timeout: 2000 })) || '';
               } catch (e) {
                 console.log(`XPath approach failed for ${fileName}, trying fallback...`);
               }
               
               if (!fileCode) {
+                // Fallback selectors for code extraction
                 const fallbackSelectors = ['.ace_text-input', 'textarea', '[contenteditable="true"]'];
                 for (const selector of fallbackSelectors) {
                   try {
@@ -451,7 +507,7 @@ async function solveQuestion(page, questionNumber, reportGenerator) {
           console.log(`Failed to extract any code from multiple files for Q${questionNumber}`);
         }
       } else {
-      const codeElement = page.locator('xpath=/html/body/div/div/div[3]/div[2]/div/div/div/div/div/div/div/div[3]/div[1]/div[2]/div/div/div[2]/div[2]');
+      const codeElement = page.locator(`xpath=${selectorsConfig.code_single_file.xpath}`);
       await codeElement.waitFor({ timeout: 2000 });
       result.code = (await codeElement.inputValue()) || 'Code not captured';
       console.log(`Extracted code for Q${questionNumber}: ${result.code.substring(0, 50)}...`);
@@ -495,7 +551,7 @@ async function solveQuestion(page, questionNumber, reportGenerator) {
     }
 
     console.log(`Looking for RUN button for Q${questionNumber}...`);
-    const runButtonXPath = '/html/body/div/div/div[3]/div[2]/div/div/div/div/div/div/div/div[3]/div[2]/div/div[2]';
+    const runButtonXPath = selectorsConfig.run_button.xpath;
     
     try {
       await page.waitForSelector(`xpath=${runButtonXPath}`, { timeout: 1000 });
@@ -512,7 +568,7 @@ async function solveQuestion(page, questionNumber, reportGenerator) {
       console.log('RUN button not found with XPath, trying fallback selectors...')
       const fallbackSelectors = [
         'button.processingDivButton',
-        'button:has-text("RUN")',
+        `button:has-text("${selectorsConfig.run_button.text}")`,
         'button:has-text("Run")'
       ];
       
@@ -539,14 +595,14 @@ async function solveQuestion(page, questionNumber, reportGenerator) {
     await page.waitForTimeout(1000);
 
     console.log(`Checking result for Q${questionNumber}...`);
-    const resultXPath = '/html/body/div/div/div[3]/div[2]/div/div/div/div/div/div/div/div[3]/div[2]/div/div[1]/h5';
+    const resultXPath = selectorsConfig.result.xpath;
     
     try {
       await page.waitForSelector(`xpath=${resultXPath}`, { timeout: 1000 });
       const resultElement = page.locator(`xpath=${resultXPath}`);
       const resultText = await resultElement.textContent();
       
-      if (resultText && resultText.toLowerCase().includes('congratulations')) {
+      if (resultText && (resultText.toLowerCase().includes('congratulations') || resultText.toLowerCase().includes('congratulations!'))) {
         result.status = 'PASSED';
         console.log(`Passed Q${questionNumber}`);
       } else if (resultText && resultText.toLowerCase().includes('Wrong Answer')) {
@@ -593,11 +649,20 @@ async function solveQuestion(page, questionNumber, reportGenerator) {
   return result;
 }
 
-test('Solve all coding questions', async ({ page, context }) => {
+test('Solve all coding questions', async ({ page, context }, testInfo) => {
   const reportGenerator = new ReportGenerator();
   const geminiAnalyzer = new GeminiAnalyzer();
   const runTimestamp = new Date().toISOString().replace(/[:.]/g, '-').slice(0, 19);
-  const runReportName = `report-${runTimestamp}.xlsx`;
+  
+  // Use runner-specific report name if multiple runners
+  const runReportName = RUNNERS > 1 
+    ? `report${RUNNER_ID}.xlsx`
+    : `report-${runTimestamp}.xlsx`;
+  
+  console.log(`\n=== Runner ${RUNNER_ID}/${RUNNERS} ===`);
+  if (RUNNERS > 1) {
+    console.log(`Using report file: ${runReportName}`);
+  }
   
   let reportGenerated = false;
   
@@ -641,15 +706,21 @@ test('Solve all coding questions', async ({ page, context }) => {
     Object.defineProperty(navigator, 'webdriver', { get: () => undefined });
   });
 
+  // Check if session file exists first - for parallel runners, wait for runner 1 to create it
+  if (!fs.existsSync(STORAGE_PATH) && RUNNERS > 1 && RUNNER_ID > 1) {
+    console.log(`[Runner ${RUNNER_ID}] No session file found. Waiting for Runner 1 to login...`);
+    await waitForSessionFile();
+  }
+
   await page.goto(BASE_URL, { waitUntil: 'networkidle' });
 
   const isLoggedIn = await page.locator('text=Dashboard').isVisible({ timeout: 5000 }).catch(() => false);
   
   if (!isLoggedIn) {
-    console.log('Session expired or invalid. Performing manual login...');
+    console.log(`[Runner ${RUNNER_ID}] Session expired or invalid. Performing login...`);
     await loginToApp(page, context);
   } else {
-    console.log('Session loaded successfully! Already logged in.');
+    console.log(`[Runner ${RUNNER_ID}] Session loaded successfully! Already logged in.`);
   }
 
   await navigateToCodingQuestions(page);
@@ -658,21 +729,38 @@ test('Solve all coding questions', async ({ page, context }) => {
   const totalQuestions = await detectTotalQuestions(page);
   console.log(`Total questions detected: ${totalQuestions}`);
   
-  const effectiveEndTo = END_TO_QUESTION ? Math.min(END_TO_QUESTION, totalQuestions) : totalQuestions;
-  console.log(`\n=== Processing range: Q${START_FROM_QUESTION} to Q${effectiveEndTo} ===`);
-
-    console.log(`\n=== Resuming from Q${START_FROM_QUESTION} ===`);
-    const navigationSuccess = await navigateToQuestion(page, START_FROM_QUESTION);
-  if (!navigationSuccess) {
-      console.log(`Failed to navigate to Q${START_FROM_QUESTION}, trying fallback...`);
-      await page.getByRole('button', { name: `Q${START_FROM_QUESTION}`, exact: true }).click();
+  // Calculate question range for this runner
+  let runnerStartFrom = START_FROM_QUESTION;
+  let runnerEndTo = END_TO_QUESTION ? Math.min(END_TO_QUESTION, totalQuestions) : totalQuestions;
+  
+  if (RUNNERS > 1) {
+    const totalQuestionsToProcess = runnerEndTo - runnerStartFrom + 1;
+    const questionsPerRunner = Math.ceil(totalQuestionsToProcess / RUNNERS);
+    runnerStartFrom = START_FROM_QUESTION + (RUNNER_ID - 1) * questionsPerRunner;
+    runnerEndTo = Math.min(runnerStartFrom + questionsPerRunner - 1, runnerEndTo);
+    
+    console.log(`\n=== Runner ${RUNNER_ID}/${RUNNERS} - Question Distribution ===`);
+    console.log(`Total questions: ${totalQuestionsToProcess}`);
+    console.log(`Questions per runner: ~${questionsPerRunner}`);
+    console.log(`This runner will process: Q${runnerStartFrom} to Q${runnerEndTo} (${runnerEndTo - runnerStartFrom + 1} questions)`);
   }
-    console.log(`Starting with Q${START_FROM_QUESTION}...`);
+  
+  const effectiveEndTo = runnerEndTo;
+  const effectiveStartFrom = runnerStartFrom;
+  console.log(`\n=== Processing range: Q${effectiveStartFrom} to Q${effectiveEndTo} ===`);
 
-    for (let i = START_FROM_QUESTION; i <= effectiveEndTo; i++) {
+    console.log(`\n=== Resuming from Q${effectiveStartFrom} ===`);
+    const navigationSuccess = await navigateToQuestion(page, effectiveStartFrom);
+  if (!navigationSuccess) {
+      console.log(`Failed to navigate to Q${effectiveStartFrom}, trying fallback...`);
+      await page.getByRole('button', { name: `Q${effectiveStartFrom}`, exact: true }).click();
+  }
+    console.log(`Starting with Q${effectiveStartFrom}...`);
+
+    for (let i = effectiveStartFrom; i <= effectiveEndTo; i++) {
     console.log(`\n=== Processing Q${i} ===`);
     
-      if (i > START_FROM_QUESTION) {
+      if (i > effectiveStartFrom) {
       const navSuccess = await navigateToQuestion(page, i);
       if (!navSuccess) {
         console.log(`Failed to navigate to Q${i}, checking if it exists...`);
@@ -740,62 +828,74 @@ test('Solve all coding questions', async ({ page, context }) => {
       }
       
       // Perform Gemini analysis on the current question's result
-      console.log(`\n=== Running Gemini Analysis for Q${i} ===`);
-      const currentResult = reportGenerator.results[reportGenerator.results.length - 1];
+      const projectName = testInfo.project?.name || '';
+      const skipAI = projectName === 'no-ai';
       
-      // Skip analysis if already processed or if insufficient data
-      if (currentResult) {
-        if (currentResult.geminiRemarks) {
-          console.log(`Skipping Gemini analysis for Q${i} - already processed`);
-        } else if (currentResult.questionText && currentResult.code && 
-                   currentResult.code !== 'Code not captured' && 
-                   currentResult.code !== 'Navigation failed' && 
-                   currentResult.code !== 'Retry exhausted') {
-          try {
-            console.log(`Analyzing ${currentResult.questionNumber}...`);
-            
-            const analysisPromise = currentResult.codeFiles 
-              ? geminiAnalyzer.analyzeQuestionAndCode(
-                  currentResult.questionText, 
-                  currentResult.code, 
-                  currentResult.codeFiles
-                )
-              : geminiAnalyzer.analyzeQuestionAndCode(
-                  currentResult.questionText, 
-                  currentResult.code
-                );
-            
-            // Increased timeout to 60s for large code analysis
-            const timeoutPromise = new Promise((_, reject) => 
-              setTimeout(() => reject(new Error('Gemini analysis timeout after 60s')), 60000)
-            );
-            const analysis = await Promise.race([analysisPromise, timeoutPromise]) as any;
-            currentResult.geminiStatus = analysis.status;
-            currentResult.geminiRemarks = analysis.remarks;
-            if (analysis.status && analysis.status !== 'MATCH' && Array.isArray(analysis.updatedRequirements)) {
-              currentResult.geminiUpdatedRequirements = analysis.updatedRequirements;
-            }
-            console.log(`${currentResult.questionNumber}: ${analysis.status} - ${analysis.remarks}`);
-            
-            if (i % 15 === 0 && i < totalQuestions) {
-              console.log(`\nProcessed ${i} questions. Adding 10s delay to prevent rate limiting...`);
-              await page.waitForTimeout(10000);
-              console.log('Resuming...\n');
-            }
-          } catch (error) {
-            console.error(`Gemini analysis failed for ${currentResult.questionNumber}`);
-            currentResult.geminiStatus = 'ERROR';
-            currentResult.geminiRemarks = 'Analysis timeout or failed';
-            
-            if (i % 10 === 0) {
-              console.log('Adding 5s delay after error to help with rate limits...');
-              await page.waitForTimeout(5000);
-            }
-          }
-        } else {
-          console.log(`Skipping Gemini analysis for Q${i} - insufficient data`);
+      if (skipAI) {
+        console.log(`\n=== Skipping Gemini Analysis for Q${i} (AI disabled) ===`);
+        const currentResult = reportGenerator.results[reportGenerator.results.length - 1];
+        if (currentResult) {
           currentResult.geminiStatus = 'SKIPPED';
-          currentResult.geminiRemarks = 'Skipped - insufficient data';
+          currentResult.geminiRemarks = 'Skipped - AI analysis disabled';
+        }
+      } else {
+        console.log(`\n=== Running Gemini Analysis for Q${i} ===`);
+        const currentResult = reportGenerator.results[reportGenerator.results.length - 1];
+        
+        // Skip analysis if already processed or if insufficient data
+        if (currentResult) {
+          if (currentResult.geminiRemarks) {
+            console.log(`Skipping Gemini analysis for Q${i} - already processed`);
+          } else if (currentResult.questionText && currentResult.code && 
+                     currentResult.code !== 'Code not captured' && 
+                     currentResult.code !== 'Navigation failed' && 
+                     currentResult.code !== 'Retry exhausted') {
+            try {
+              console.log(`Analyzing ${currentResult.questionNumber}...`);
+              
+              const analysisPromise = currentResult.codeFiles 
+                ? geminiAnalyzer.analyzeQuestionAndCode(
+                    currentResult.questionText, 
+                    currentResult.code, 
+                    currentResult.codeFiles
+                  )
+                : geminiAnalyzer.analyzeQuestionAndCode(
+                    currentResult.questionText, 
+                    currentResult.code
+                  );
+              
+              // Increased timeout to 60s for large code analysis
+              const timeoutPromise = new Promise((_, reject) => 
+                setTimeout(() => reject(new Error('Gemini analysis timeout after 60s')), 60000)
+              );
+              const analysis = await Promise.race([analysisPromise, timeoutPromise]) as any;
+              currentResult.geminiStatus = analysis.status;
+              currentResult.geminiRemarks = analysis.remarks;
+              if (analysis.status && analysis.status !== 'MATCH' && Array.isArray(analysis.updatedRequirements)) {
+                currentResult.geminiUpdatedRequirements = analysis.updatedRequirements;
+              }
+              console.log(`${currentResult.questionNumber}: ${analysis.status} - ${analysis.remarks}`);
+              
+              if (i % 15 === 0 && i < totalQuestions) {
+                console.log(`\nProcessed ${i} questions. Adding 10s delay to prevent rate limiting...`);
+                await page.waitForTimeout(10000);
+                console.log('Resuming...\n');
+              }
+            } catch (error) {
+              console.error(`Gemini analysis failed for ${currentResult.questionNumber}`);
+              currentResult.geminiStatus = 'ERROR';
+              currentResult.geminiRemarks = 'Analysis timeout or failed';
+              
+              if (i % 10 === 0) {
+                console.log('Adding 5s delay after error to help with rate limits...');
+                await page.waitForTimeout(5000);
+              }
+            }
+          } else {
+            console.log(`Skipping Gemini analysis for Q${i} - insufficient data`);
+            currentResult.geminiStatus = 'SKIPPED';
+            currentResult.geminiRemarks = 'Skipped - insufficient data';
+          }
         }
       }
       try { reportGenerator.generateExcelReport(runReportName); } catch (e) { console.error('Incremental report save failed:', (e as any).message); }
@@ -811,8 +911,8 @@ test('Solve all coding questions', async ({ page, context }) => {
       console.log(`Looking for NEXT button to move to Q${i + 1}...`);
       
       const nextButtonSelectors = [
-        '/html/body/div/div/div[3]/div[2]/div/div/div/div/div/div/div/div[3]/div[2]/div/div[2]/button[2]',
-        'button:has-text("NEXT")',
+        selectorsConfig.next_button.xpath,
+        `button:has-text("${selectorsConfig.next_button.text}")`,
         'button:has-text("Next")',
         '[data-testid="next-button"]',
         'button[aria-label*="next" i]'
@@ -868,12 +968,50 @@ test('Solve all coding questions', async ({ page, context }) => {
     const summary = reportGenerator.getSummary();
     reportGenerated = true;
 
-    console.log('\n=== SUMMARY ===');
+    console.log('\n=== RUNNER SUMMARY ===');
+    console.log(`Runner: ${RUNNER_ID}/${RUNNERS}`);
     console.log(`Total: ${summary.total}`);
     console.log(`Passed: ${summary.passed}`);
     console.log(`Failed: ${summary.failed}`);
     console.log(`Success Rate: ${summary.successRate}%`);
     console.log(`Report: ${reportPath}`);
+    
+    // Merge reports if multiple runners
+    if (RUNNERS > 1) {
+      console.log(`\n=== Waiting for all runners to complete before merging... ===`);
+      // Wait a bit for other runners to finish
+      await new Promise(resolve => setTimeout(resolve, 5000));
+      
+      const reportFiles: string[] = [];
+      for (let i = 1; i <= RUNNERS; i++) {
+        reportFiles.push(`report${i}.xlsx`);
+      }
+      
+      // Check if all report files exist
+      const reportsDir = path.join(__dirname, '..', 'reports');
+      const allReportsExist = reportFiles.every(file => {
+        const filePath = path.join(reportsDir, file);
+        return fs.existsSync(filePath);
+      });
+      
+      if (allReportsExist) {
+        const mergedReportName = `report-${runTimestamp}.xlsx`;
+        const mergedPath = ReportGenerator.mergeReports(reportFiles, mergedReportName);
+        console.log(`\n=== Merged Report Created ===`);
+        console.log(`Merged ${reportFiles.length} reports into: ${mergedPath}`);
+        
+        // Optionally clean up individual reports
+        // for (const file of reportFiles) {
+        //   const filePath = path.join(reportsDir, file);
+        //   if (fs.existsSync(filePath)) {
+        //     fs.unlinkSync(filePath);
+        //   }
+        // }
+      } else {
+        console.log(`\n=== Not all reports ready yet. Run merge manually or wait for all runners. ===`);
+        console.log(`Expected reports: ${reportFiles.join(', ')}`);
+      }
+    }
       } catch (error) {
     console.error('\n=== Test interrupted or failed ===');
     console.error(`Error: ${error.message}`);
@@ -886,6 +1024,7 @@ test('Solve all coding questions', async ({ page, context }) => {
       reportGenerated = true;
 
       console.log('\n=== PARTIAL SUMMARY ===');
+      console.log(`Runner: ${RUNNER_ID}/${RUNNERS}`);
       console.log(`Total Processed: ${summary.total}`);
       console.log(`Passed: ${summary.passed}`);
       console.log(`Failed: ${summary.failed}`);
@@ -907,6 +1046,7 @@ test('Solve all coding questions', async ({ page, context }) => {
   const summary = reportGenerator.getSummary();
 
         console.log('\n=== FINAL SUMMARY ===');
+        console.log(`Runner: ${RUNNER_ID}/${RUNNERS}`);
   console.log(`Total: ${summary.total}`);
   console.log(`Passed: ${summary.passed}`);
   console.log(`Failed: ${summary.failed}`);
