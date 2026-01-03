@@ -6,11 +6,11 @@
         },
         "question_text":{
             "id":"",
-            "xpath":"/html/body/div/div/div[3]/div[2]/div/div/div/div/div/div/div/div[2]/div/div[1]/div"
+            "xpath":"/html/body/div/div/div[3]/div[2]/div[2]/div/div[1]/div[1]/div/p[1]"
         },
         "code_single_file":{
             "id":"",
-            "xpath":"/html/body/div/div/div[3]/div[2]/div/div/div/div/div/div/div/div[3]/div[1]/div[2]/div/div/div[2]/div[2]"
+            "xpath":"/html/body/div/div/div[3]/div[2]/div[2]/div/div[2]/div[1]/div/div[2]/div"
         },
         "code_multiple_files":{
             "id":"",
@@ -21,13 +21,13 @@
             "xpath":"/html/body/div/div/div[3]/div[2]/div/div/div/div/div/div/div/div[3]/div[1]/div[1]/div/div"
         },
         "run_button":{
-            "text":"RUN",
+            "text":"RUN CODE",
             "id":"",
-            "xpath":"/html/body/div/div/div[3]/div[2]/div/div/div/div/div/div/div/div[3]/div[2]/div/div[2]"
+            "xpath":"/html/body/div/div/div[3]/div[2]/div[2]/div/div[2]/div[2]/div/div[2]/button"
         },
         "result":{
             "id":"",
-            "xpath":"/html/body/div/div/div[3]/div[2]/div/div/div/div/div/div/div/div[3]/div[2]/div/div[1]/h5"
+            "xpath":"/html/body/div/div/div[3]/div[2]/div[2]/div/div[2]/div[2]/div/div[1]/h5"
         },
         "next_button":{
             "text":"NEXT",

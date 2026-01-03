@@ -22,11 +22,24 @@ const STORAGE_PATH = path.join(AUTH_DIR, 'user.json');
 
 const test = base.extend({
   storageState: async ({}, use) => {
+    // For runners 2+, wait for session file if it doesn't exist yet
+    if (RUNNERS > 1 && RUNNER_ID > 1 && !fs.existsSync(STORAGE_PATH)) {
+      console.log(`[Runner ${RUNNER_ID}] No session file yet, waiting for Runner 1...`);
+      const start = Date.now();
+      const maxWait = 300000; // 5 minutes
+      while (Date.now() - start < maxWait && !fs.existsSync(STORAGE_PATH)) {
+        await new Promise(resolve => setTimeout(resolve, 2000));
+      }
+      if (fs.existsSync(STORAGE_PATH)) {
+        console.log(`[Runner ${RUNNER_ID}] Session file found after waiting!`);
+      }
+    }
+    
     if (fs.existsSync(STORAGE_PATH)) {
-      console.log('Loading saved session from', STORAGE_PATH);
+      console.log(`[Runner ${RUNNER_ID}] Loading saved session from ${STORAGE_PATH}`);
       await use(STORAGE_PATH);
     } else {
-      console.log('No saved session found, will perform manual login');
+      console.log(`[Runner ${RUNNER_ID}] No saved session found, will perform manual login`);
       await use(undefined);
     }
   },
@@ -51,12 +64,6 @@ async function waitForSessionFile(maxWait = 300000, checkInterval = 2000) {
 }
 
 async function loginToApp(page, context) {
-  // If session already exists, use it
-  if (fs.existsSync(STORAGE_PATH)) {
-    console.log(`[Runner ${RUNNER_ID}] Session file already exists, using saved session`);
-    return;
-  }
-
   // If multiple runners, only runner 1 should do manual login
   // Other runners wait for runner 1 to create the session file
   if (RUNNERS > 1 && RUNNER_ID > 1) {
@@ -64,6 +71,8 @@ async function loginToApp(page, context) {
     const sessionReady = await waitForSessionFile();
     if (sessionReady) {
       console.log(`[Runner ${RUNNER_ID}] Session ready, proceeding...`);
+      // Wait a bit more for session to be fully written
+      await new Promise(resolve => setTimeout(resolve, 2000));
       return;
     } else {
       console.log(`[Runner ${RUNNER_ID}] Session not ready, attempting own login...`);
@@ -75,7 +84,7 @@ async function loginToApp(page, context) {
 
   const dashboardVisible = await page
     .locator('text=Dashboard')
-    .isVisible()
+    .isVisible({ timeout: 5000 })
     .catch(() => false);
   if (dashboardVisible) {
     console.log(`[Runner ${RUNNER_ID}] Already logged in.`);
@@ -118,20 +127,37 @@ async function loginToApp(page, context) {
 }
 
 async function navigateToCodingQuestions(page) {
-  console.log(`Navigating to coding questions: ${BASE_URL}${TARGET_PATH}`);
-  await page.goto(`${BASE_URL}${TARGET_PATH}`, { waitUntil: 'networkidle' });
+  console.log(`[Runner ${RUNNER_ID}] Navigating to coding questions: ${BASE_URL}${TARGET_PATH}`);
+  
+  // Clear any cached state and navigate
+  await page.goto(`${BASE_URL}${TARGET_PATH}`, { 
+    waitUntil: 'networkidle',
+    timeout: 60000 
+  });
 
   const url = page.url();
-  console.log(`Current URL after navigation: ${url}`);
+  console.log(`[Runner ${RUNNER_ID}] Current URL after navigation: ${url}`);
   
-  if (url.includes('/testing/coding/ht')) {
-    console.log('Reached coding page directly.');
+  // Check if we're still on login page or dashboard
+  if (url.includes('/login') || url.includes('Sign in')) {
+    console.log(`[Runner ${RUNNER_ID}] Still on login page, waiting and retrying...`);
+    await page.waitForTimeout(3000);
+    await page.goto(`${BASE_URL}${TARGET_PATH}`, { waitUntil: 'networkidle', timeout: 60000 });
   } else if (url.includes('/Dashboard') || url.includes('/dashboard')) {
-    console.log('From Dashboard → navigating to coding page...');
-    await page.goto(`${BASE_URL}${TARGET_PATH}`, { waitUntil: 'networkidle' });
+    console.log(`[Runner ${RUNNER_ID}] On Dashboard → navigating to coding page...`);
+    await page.goto(`${BASE_URL}${TARGET_PATH}`, { waitUntil: 'networkidle', timeout: 60000 });
   }
 
-  await page.waitForTimeout(2000);
+  // Wait for page to fully load
+  await page.waitForTimeout(3000);
+  
+  // Verify we're on the coding questions page
+  const finalUrl = page.url();
+  console.log(`[Runner ${RUNNER_ID}] Final URL: ${finalUrl}`);
+  
+  if (!finalUrl.includes(TARGET_PATH.replace(/^\//, ''))) {
+    console.log(`[Runner ${RUNNER_ID}] Warning: May not be on correct page. Expected path: ${TARGET_PATH}`);
+  }
   
   console.log('Waiting for question buttons to load...');
   
@@ -331,7 +357,6 @@ async function navigateToQuestion(page, questionNumber) {
         await button.scrollIntoViewIfNeeded();
         await button.click();
         console.log(`Clicked Q${questionNumber} button`);
-        await page.waitForTimeout(500);
         return true;
       }
     } catch (e) {
@@ -352,7 +377,6 @@ async function navigateToQuestion(page, questionNumber) {
           await button.scrollIntoViewIfNeeded();
           await button.click();
           console.log(`Clicked Q${questionNumber} button via fallback`);
-          await page.waitForTimeout(500);
           return true;
         }
       }
@@ -376,7 +400,6 @@ async function solveQuestion(page, questionNumber, reportGenerator) {
   } as QuestionResult;
 
   try {
-    await page.waitForTimeout(500);
 // Extract question text
     try {
       const questionElement = page.locator(`xpath=${selectorsConfig.question_text.xpath}`);
@@ -443,7 +466,6 @@ async function solveQuestion(page, questionNumber, reportGenerator) {
             if (fileName && fileName.trim()) {
               console.log(`Clicking file button for: ${fileName.trim()}`);
               await button.click();
-              await page.waitForTimeout(1000);
               
               let fileCode = '';
               // Extract code from the file
@@ -504,13 +526,19 @@ async function solveQuestion(page, questionNumber, reportGenerator) {
           console.log(`Successfully extracted ${codeFiles.length} file(s) for Q${questionNumber}`);
         } else {
           result.code = 'Code not captured from multiple files';
-          console.log(`Failed to extract any code from multiple files for Q${questionNumber}`);
+          result.status = 'SKIPPED';
+          console.log(`Failed to extract any code from multiple files for Q${questionNumber} - marking as SKIPPED`);
         }
       } else {
       const codeElement = page.locator(`xpath=${selectorsConfig.code_single_file.xpath}`);
       await codeElement.waitFor({ timeout: 2000 });
-      result.code = (await codeElement.inputValue()) || 'Code not captured';
-      console.log(`Extracted code for Q${questionNumber}: ${result.code.substring(0, 50)}...`);
+      const extractedCode = await codeElement.inputValue();
+      result.code = extractedCode || 'Code not captured';
+      if (!extractedCode || extractedCode.trim() === '') {
+        console.log(`No code extracted for Q${questionNumber} - will still attempt to run test`);
+      } else {
+        console.log(`Extracted code for Q${questionNumber}: ${result.code.substring(0, 50)}...`);
+      }
       }
     } catch (e) {
       console.log(`Primary XPath failed for code extraction Q${questionNumber}, trying fallback selectors...`);
@@ -546,7 +574,7 @@ async function solveQuestion(page, questionNumber, reportGenerator) {
       
       if (!codeFound) {
         result.code = 'Code not captured';
-        console.log(`Could not extract code for Q${questionNumber}: ${e.message}`);
+        console.log(`Could not extract code for Q${questionNumber} - will still attempt to run test: ${e.message}`);
       }
     }
 
@@ -592,52 +620,151 @@ async function solveQuestion(page, questionNumber, reportGenerator) {
       }
     }
 
-    await page.waitForTimeout(1000);
-
-    console.log(`Checking result for Q${questionNumber}...`);
+    // Wait only for result to appear - no arbitrary timeout
+    console.log(`Waiting for result for Q${questionNumber}...`);
     const resultXPath = selectorsConfig.result.xpath;
     
-    try {
-      await page.waitForSelector(`xpath=${resultXPath}`, { timeout: 1000 });
-      const resultElement = page.locator(`xpath=${resultXPath}`);
-      const resultText = await resultElement.textContent();
-      
-      if (resultText && (resultText.toLowerCase().includes('congratulations') || resultText.toLowerCase().includes('congratulations!'))) {
-        result.status = 'PASSED';
-        console.log(`Passed Q${questionNumber}`);
-      } else if (resultText && resultText.toLowerCase().includes('Wrong Answer')) {
-        result.status = 'FAILED';
-        console.log(`Failed Q${questionNumber}`);
-      } else {
-        result.status = 'SKIPPED';
-        console.log(`Skipped Q${questionNumber} (unclear result: ${resultText})`);
-      }
-    } catch (e) {
-      console.log(`No result message found for Q${questionNumber}, checking with fallback selectors...`);
-
-      const success = await page
-        .locator('text=Congratulations!, text=Correct')
-        .isVisible({ timeout: 2000 })
-        .catch(() => false);
-
-      const failure = await page
-        .locator('text=Wrong Answer, text=Incorrect')
-        .isVisible({ timeout: 2000 })
-        .catch(() => false);
-
-      if (success) {
-        result.status = 'PASSED';
-        console.log(`Passed Q${questionNumber} (fallback detection)`);
-      } else if (failure) {
-        result.status = 'FAILED';
-        console.log(`Failed Q${questionNumber} (fallback detection)`);
-      } else {
-        result.status = 'SKIPPED';
-        console.log(`Skipped Q${questionNumber} (no clear result)`);
+    let resultFound = false;
+    
+    // Try primary XPath if configured - wait for result element to appear
+    if (resultXPath && resultXPath.trim() !== '') {
+      try {
+        // Wait for result element to appear (up to 15 seconds)
+        await page.waitForSelector(`xpath=${resultXPath}`, { timeout: 15000, state: 'visible' });
+        const resultElement = page.locator(`xpath=${resultXPath}`);
+        const resultText = await resultElement.textContent();
+        
+        if (resultText) {
+          const trimmedText = resultText.trim();
+          const lowerText = trimmedText.toLowerCase();
+          console.log(`[Runner ${RUNNER_ID}] Result text found: "${trimmedText}"`);
+          
+          if (lowerText.includes('congratulations') || lowerText.includes('correct') || lowerText.includes('passed')) {
+            result.status = 'PASSED';
+            console.log(`✓ Passed Q${questionNumber} - Result: "${trimmedText}"`);
+            resultFound = true;
+          } else if (lowerText.includes('wrong answer') || lowerText.includes('incorrect') || lowerText.includes('failed')) {
+            result.status = 'FAILED';
+            console.log(`✗ Failed Q${questionNumber} - Result: "${trimmedText}"`);
+            resultFound = true;
+          } else {
+            console.log(`? Unknown result for Q${questionNumber}: "${trimmedText}"`);
+          }
+        }
+      } catch (e) {
+        console.log(`Primary result XPath failed for Q${questionNumber}: ${e.message}`);
       }
     }
+    
+    // If not found, try multiple fallback methods
+    if (!resultFound) {
+      console.log(`Trying fallback methods to detect result for Q${questionNumber}...`);
+      
+      // Method 1: Check for success messages
+      const successSelectors = [
+        'text=/Congratulations/i',
+        'text=/Correct/i',
+        'text=/Passed/i',
+        'text=/Success/i',
+        '[class*="success"]',
+        '[class*="correct"]',
+        '[class*="passed"]',
+        'h5:has-text("Congratulations")',
+        'h5:has-text("Correct")',
+        '*:has-text("Congratulations")',
+        '*:has-text("Correct")'
+      ];
+      
+      for (const selector of successSelectors) {
+        try {
+          const element = page.locator(selector).first();
+          if (await element.isVisible({ timeout: 2000 })) {
+            const text = await element.textContent();
+            if (text) {
+              const lowerText = text.toLowerCase();
+              if (lowerText.includes('congratulations') || lowerText.includes('correct') || lowerText.includes('passed')) {
+                result.status = 'PASSED';
+                console.log(`Passed Q${questionNumber} (found via selector: ${selector}) - ${text.trim()}`);
+                resultFound = true;
+                break;
+              }
+            }
+          }
+        } catch (e) {
+          continue;
+        }
+      }
+      
+      // Method 2: Check for failure messages
+      if (!resultFound) {
+        const failureSelectors = [
+          'text=/Wrong Answer/i',
+          'text=/Incorrect/i',
+          'text=/Failed/i',
+          'text=/Error/i',
+          '[class*="error"]',
+          '[class*="failed"]',
+          '[class*="incorrect"]',
+          'h5:has-text("Wrong Answer")',
+          'h5:has-text("Incorrect")',
+          '*:has-text("Wrong Answer")',
+          '*:has-text("Incorrect")'
+        ];
+        
+        for (const selector of failureSelectors) {
+          try {
+            const element = page.locator(selector).first();
+            if (await element.isVisible({ timeout: 2000 })) {
+              const text = await element.textContent();
+              if (text) {
+                const lowerText = text.toLowerCase();
+                if (lowerText.includes('wrong answer') || lowerText.includes('incorrect') || lowerText.includes('failed')) {
+                  result.status = 'FAILED';
+                  console.log(`Failed Q${questionNumber} (found via selector: ${selector}) - ${text.trim()}`);
+                  resultFound = true;
+                  break;
+                }
+              }
+            }
+          } catch (e) {
+            continue;
+          }
+        }
+      }
+      
+      // Method 3: Check all visible text on the page for result keywords
+      if (!resultFound) {
+        try {
+          const pageText = await page.textContent('body');
+          if (pageText) {
+            const lowerText = pageText.toLowerCase();
+            if (lowerText.includes('congratulations!') || lowerText.includes('correct')) {
+              result.status = 'PASSED';
+              console.log(`Passed Q${questionNumber} (found in page text)`);
+              resultFound = true;
+            } else if (lowerText.includes('wrong answer') || lowerText.includes('incorrect')) {
+              result.status = 'FAILED';
+              console.log(`Failed Q${questionNumber} (found in page text)`);
+              resultFound = true;
+            }
+          }
+        } catch (e) {
+          console.log(`Could not read page text: ${e.message}`);
+        }
+      }
+    }
+    
+    // If still not found, mark as skipped
+    if (!resultFound) {
+      result.status = 'SKIPPED';
+      console.log(`Skipped Q${questionNumber} (could not determine result - may need to check manually)`);
+    }
 
-    await page.waitForTimeout(500);
+    // Even if code was not captured, still try to run the test
+    // (code might already be in the editor from previous run)
+    if (result.code === 'Code not captured' || result.code === 'Code not captured from multiple files') {
+      console.log(`Q${questionNumber} - Code not captured, but will still attempt to run test`);
+    }
 
   } catch (err) {
     result.status = 'FAILED';
@@ -706,23 +833,61 @@ test('Solve all coding questions', async ({ page, context }, testInfo) => {
     Object.defineProperty(navigator, 'webdriver', { get: () => undefined });
   });
 
-  // Check if session file exists first - for parallel runners, wait for runner 1 to create it
-  if (!fs.existsSync(STORAGE_PATH) && RUNNERS > 1 && RUNNER_ID > 1) {
-    console.log(`[Runner ${RUNNER_ID}] No session file found. Waiting for Runner 1 to login...`);
+  // For runners 2+, wait for Runner 1 to create session file
+  if (RUNNERS > 1 && RUNNER_ID > 1) {
+    console.log(`[Runner ${RUNNER_ID}] Waiting for Runner 1 to create session file...`);
     await waitForSessionFile();
+    // Wait a bit more to ensure file is fully written
+    await new Promise(resolve => setTimeout(resolve, 3000));
+    
+    // Clear browser cache/cookies to ensure clean state
+    console.log(`[Runner ${RUNNER_ID}] Clearing browser cache and cookies...`);
+    const context = page.context();
+    await context.clearCookies();
+    await context.clearPermissions();
+    
+    console.log(`[Runner ${RUNNER_ID}] Session file ready. Storage state should be loaded via fixture.`);
   }
 
-  await page.goto(BASE_URL, { waitUntil: 'networkidle' });
+  // First, verify we're logged in by going to base URL
+  console.log(`[Runner ${RUNNER_ID}] Verifying login status...`);
+  await page.goto(BASE_URL, { waitUntil: 'networkidle', timeout: 60000 });
 
-  const isLoggedIn = await page.locator('text=Dashboard').isVisible({ timeout: 5000 }).catch(() => false);
+  const isLoggedIn = await page.locator('text=Dashboard').isVisible({ timeout: 10000 }).catch(() => false);
+  const currentUrl = page.url();
+  console.log(`[Runner ${RUNNER_ID}] Current URL: ${currentUrl}`);
+  console.log(`[Runner ${RUNNER_ID}] Is logged in: ${isLoggedIn}`);
   
-  if (!isLoggedIn) {
-    console.log(`[Runner ${RUNNER_ID}] Session expired or invalid. Performing login...`);
+  // If not logged in or on login page, perform login
+  if (!isLoggedIn || currentUrl.includes('/login') || currentUrl.includes('Sign in') || currentUrl.includes('accounts.google.com')) {
+    console.log(`[Runner ${RUNNER_ID}] Not logged in or on login page. Performing login...`);
     await loginToApp(page, context);
+    
+    // After login, verify we're on dashboard (with retries)
+    let verifyLogin = false;
+    for (let retry = 0; retry < 3; retry++) {
+      await page.goto(BASE_URL, { waitUntil: 'networkidle', timeout: 60000 });
+      await page.waitForTimeout(3000);
+      
+      verifyLogin = await page.locator('text=Dashboard').isVisible({ timeout: 10000 }).catch(() => false);
+      if (verifyLogin) {
+        break;
+      }
+      console.log(`[Runner ${RUNNER_ID}] Login verification attempt ${retry + 1}/3 failed, retrying...`);
+    }
+    
+    if (!verifyLogin) {
+      console.log(`[Runner ${RUNNER_ID}] Login verification failed after retries. Current URL: ${page.url()}`);
+      // Don't throw error, just log and continue - might still work
+      console.log(`[Runner ${RUNNER_ID}] Continuing anyway, will check again at navigation...`);
+    } else {
+      console.log(`[Runner ${RUNNER_ID}] Login verified. On dashboard.`);
+    }
   } else {
     console.log(`[Runner ${RUNNER_ID}] Session loaded successfully! Already logged in.`);
   }
 
+  // Now navigate to coding questions page
   await navigateToCodingQuestions(page);
 
   try { 
@@ -804,7 +969,6 @@ test('Solve all coding questions', async ({ page, context }, testInfo) => {
         
         reportGenerator.results.pop();
         
-        await page.waitForTimeout(500);
         await navigateToQuestion(page, i);
       } else {
         skipToNext = true;
@@ -940,7 +1104,6 @@ test('Solve all coding questions', async ({ page, context }, testInfo) => {
         try {
           await nextButton.click();
           console.log(`Moving to Q${i + 1}...`);
-          await page.waitForTimeout(500);
         } catch (e) {
           console.log(`Failed to click NEXT button: ${e.message}`);
           console.log(`Trying direct navigation to Q${i + 1}...`);
