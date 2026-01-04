@@ -20,6 +20,32 @@ const RUNNER_ID = parseInt(process.env.RUNNER_ID || '1');
 const AUTH_DIR = path.join(__dirname, '..', 'playwright', '.auth');
 const STORAGE_PATH = path.join(AUTH_DIR, 'user.json');
 
+// Helper function to get local timestamp in ISO-like format for filenames
+function getLocalTimestamp(): string {
+  const now = new Date();
+  const year = now.getFullYear();
+  const month = String(now.getMonth() + 1).padStart(2, '0');
+  const day = String(now.getDate()).padStart(2, '0');
+  const hours = String(now.getHours()).padStart(2, '0');
+  const minutes = String(now.getMinutes()).padStart(2, '0');
+  const seconds = String(now.getSeconds()).padStart(2, '0');
+  return `${year}-${month}-${day}T${hours}-${minutes}-${seconds}`;
+}
+
+// Helper function to get local timestamp in ISO format for result timestamps (without timezone)
+function getLocalISOTimestamp(): string {
+  const now = new Date();
+  const year = now.getFullYear();
+  const month = String(now.getMonth() + 1).padStart(2, '0');
+  const day = String(now.getDate()).padStart(2, '0');
+  const hours = String(now.getHours()).padStart(2, '0');
+  const minutes = String(now.getMinutes()).padStart(2, '0');
+  const seconds = String(now.getSeconds()).padStart(2, '0');
+  const milliseconds = String(now.getMilliseconds()).padStart(3, '0');
+  
+  return `${year}-${month}-${day}T${hours}:${minutes}:${seconds}.${milliseconds}`;
+}
+
 const test = base.extend({
   storageState: async ({}, use) => {
     // For runners 2+, wait for session file if it doesn't exist yet
@@ -64,14 +90,11 @@ async function waitForSessionFile(maxWait = 300000, checkInterval = 2000) {
 }
 
 async function loginToApp(page, context) {
-  // If multiple runners, only runner 1 should do manual login
-  // Other runners wait for runner 1 to create the session file
   if (RUNNERS > 1 && RUNNER_ID > 1) {
     console.log(`[Runner ${RUNNER_ID}] Waiting for Runner 1 to complete login...`);
     const sessionReady = await waitForSessionFile();
     if (sessionReady) {
       console.log(`[Runner ${RUNNER_ID}] Session ready, proceeding...`);
-      // Wait a bit more for session to be fully written
       await new Promise(resolve => setTimeout(resolve, 2000));
       return;
     } else {
@@ -138,7 +161,6 @@ async function navigateToCodingQuestions(page) {
   const url = page.url();
   console.log(`[Runner ${RUNNER_ID}] Current URL after navigation: ${url}`);
   
-  // Check if we're still on login page or dashboard
   if (url.includes('/login') || url.includes('Sign in')) {
     console.log(`[Runner ${RUNNER_ID}] Still on login page, waiting and retrying...`);
     await page.waitForTimeout(3000);
@@ -150,8 +172,6 @@ async function navigateToCodingQuestions(page) {
 
   // Wait for page to fully load
   await page.waitForTimeout(3000);
-  
-  // Verify we're on the coding questions page
   const finalUrl = page.url();
   console.log(`[Runner ${RUNNER_ID}] Final URL: ${finalUrl}`);
   
@@ -396,7 +416,7 @@ async function solveQuestion(page, questionNumber, reportGenerator) {
     questionText: '',
     code: '',
     status: 'FAILED',
-    timestamp: new Date().toISOString(),
+    timestamp: getLocalISOTimestamp(),
   } as QuestionResult;
 
   try {
@@ -640,9 +660,15 @@ async function solveQuestion(page, questionNumber, reportGenerator) {
         
         while (attempts < maxAttempts && resultText && resultText.trim().toLowerCase().includes('processing')) {
           console.log(`[Runner ${RUNNER_ID}] Still processing... waiting for result (attempt ${attempts + 1}/${maxAttempts})`);
+          attempts++;
+          // Wait before next check, but check immediately after result changes
           await page.waitForTimeout(1000);
           resultText = await resultElement.textContent();
-          attempts++;
+          
+          // If result changed from processing, break immediately
+          if (resultText && !resultText.trim().toLowerCase().includes('processing')) {
+            break;
+          }
         }
         
         if (resultText) {
@@ -792,7 +818,7 @@ async function solveQuestion(page, questionNumber, reportGenerator) {
 test('Solve all coding questions', async ({ page, context }, testInfo) => {
   const reportGenerator = new ReportGenerator();
   const geminiAnalyzer = new GeminiAnalyzer();
-  const runTimestamp = new Date().toISOString().replace(/[:.]/g, '-').slice(0, 19);
+  const runTimestamp = getLocalTimestamp();
   
   // Use runner-specific report name if multiple runners
   const runReportName = RUNNERS > 1 
@@ -876,22 +902,10 @@ test('Solve all coding questions', async ({ page, context }, testInfo) => {
     console.log(`[Runner ${RUNNER_ID}] Not logged in or on login page. Performing login...`);
     await loginToApp(page, context);
     
-    // After login, verify we're on dashboard (with retries)
-    let verifyLogin = false;
-    for (let retry = 0; retry < 3; retry++) {
-      await page.goto(BASE_URL, { waitUntil: 'networkidle', timeout: 60000 });
-      await page.waitForTimeout(3000);
-      
-      verifyLogin = await page.locator('text=Dashboard').isVisible({ timeout: 10000 }).catch(() => false);
-      if (verifyLogin) {
-        break;
-      }
-      console.log(`[Runner ${RUNNER_ID}] Login verification attempt ${retry + 1}/3 failed, retrying...`);
-    }
+    const verifyLogin = await page.locator('text=Dashboard').isVisible({ timeout: 10000 }).catch(() => false);
     
     if (!verifyLogin) {
-      console.log(`[Runner ${RUNNER_ID}] Login verification failed after retries. Current URL: ${page.url()}`);
-      // Don't throw error, just log and continue - might still work
+      console.log(`[Runner ${RUNNER_ID}] Login verification failed. Current URL: ${page.url()}`);
       console.log(`[Runner ${RUNNER_ID}] Continuing anyway, will check again at navigation...`);
     } else {
       console.log(`[Runner ${RUNNER_ID}] Login verified. On dashboard.`);
@@ -955,7 +969,7 @@ test('Solve all coding questions', async ({ page, context }, testInfo) => {
           questionText: `Question ${i}`,
           code: 'Navigation failed',
           status: 'SKIPPED',
-          timestamp: new Date().toISOString(),
+          timestamp: getLocalISOTimestamp(),
           errorMessage: 'Failed to navigate to question'
         } as QuestionResult;
         reportGenerator.addResult(result);
@@ -994,7 +1008,7 @@ test('Solve all coding questions', async ({ page, context }, testInfo) => {
             questionText: result.questionText || `Question ${i}`,
             code: 'Retry exhausted',
             status: 'SKIPPED' as const,
-            timestamp: new Date().toISOString(),
+            timestamp: getLocalISOTimestamp(),
             errorMessage: `Failed after ${maxRetries} retries due to: ${result.errorMessage}`
           } as QuestionResult;
           reportGenerator.addResult(skipResult);
@@ -1176,13 +1190,6 @@ test('Solve all coding questions', async ({ page, context }, testInfo) => {
         console.log(`\n=== Merged Report Created ===`);
         console.log(`Merged ${reportFiles.length} reports into: ${mergedPath}`);
         
-        // Optionally clean up individual reports
-        // for (const file of reportFiles) {
-        //   const filePath = path.join(reportsDir, file);
-        //   if (fs.existsSync(filePath)) {
-        //     fs.unlinkSync(filePath);
-        //   }
-        // }
       } else {
         console.log(`\n=== Not all reports ready yet. Run merge manually or wait for all runners. ===`);
         console.log(`Expected reports: ${reportFiles.join(', ')}`);
